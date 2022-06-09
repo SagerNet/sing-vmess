@@ -71,11 +71,11 @@ func Key(uuid uuid.UUID) (key [16]byte) {
 	md5hash := md5.New()
 	common.Must1(md5hash.Write(uuid[:]))
 	common.Must1(md5hash.Write([]byte("c48619fe-8f02-49e0-b9e9-edf763e17e21")))
-	md5hash.Sum(key[:0])
+	md5hash.Sum(common.Dup(key[:0]))
 	return
 }
 
-func AuthID(key [16]byte, time time.Time, buffer *buf.Buffer) (authID [16]byte) {
+func AuthID(key [16]byte, time time.Time, buffer *buf.Buffer) {
 	common.Must(binary.Write(buffer, binary.BigEndian, time.Unix()))
 	buffer.WriteRandom(4)
 	checksum := crc32.ChecksumIEEE(buffer.Bytes())
@@ -84,7 +84,6 @@ func AuthID(key [16]byte, time time.Time, buffer *buf.Buffer) (authID [16]byte) 
 	common.Must(err)
 	common.KeepAlive(key)
 	aesBlock.Encrypt(buffer.Bytes(), buffer.Bytes())
-	return
 }
 
 func AutoSecurityType() int {
