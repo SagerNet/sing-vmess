@@ -13,11 +13,9 @@ import (
 var ErrBadLengthChunk = E.New("bad length chunk")
 
 type StreamChunkReader struct {
-	upstream         io.Reader
-	chunkMasking     sha3.ShakeHash
-	globalPadding    sha3.ShakeHash
-	remaining        int
-	paddingRemaining int
+	upstream      io.Reader
+	chunkMasking  sha3.ShakeHash
+	globalPadding sha3.ShakeHash
 }
 
 func NewStreamChunkReader(upstream io.Reader, chunkMasking sha3.ShakeHash, globalPadding sha3.ShakeHash) *StreamChunkReader {
@@ -29,43 +27,42 @@ func NewStreamChunkReader(upstream io.Reader, chunkMasking sha3.ShakeHash, globa
 }
 
 func (r *StreamChunkReader) Read(p []byte) (n int, err error) {
-	if r.remaining == 0 {
-		if r.paddingRemaining > 0 {
-			_, err = io.CopyN(io.Discard, r.upstream, int64(r.paddingRemaining))
-			if err != nil {
-				return
-			}
-			r.paddingRemaining = 0
-		}
-		var length uint16
-		err = binary.Read(r.upstream, binary.BigEndian, &length)
-		if err != nil {
-			return
-		}
-		if r.chunkMasking != nil {
-			var hashCode uint16
-			common.Must(binary.Read(r.chunkMasking, binary.BigEndian, &hashCode))
-			length ^= hashCode
-		}
-		r.remaining = int(length)
-		if r.globalPadding != nil {
-			var hashCode uint16
-			common.Must(binary.Read(r.globalPadding, binary.BigEndian, &hashCode))
-			r.paddingRemaining = int(hashCode % 64)
-			r.remaining -= r.paddingRemaining
-		}
-		if r.remaining <= 0 {
-			err = E.Extend(ErrBadLengthChunk, "length=", length, ", padding=", r.paddingRemaining)
-			return
-		}
+	var length uint16
+	err = binary.Read(r.upstream, binary.BigEndian, &length)
+	if err != nil {
+		return
+	}
+	var paddingLen int
+	if r.globalPadding != nil {
+		var hashCode uint16
+		common.Must(binary.Read(r.globalPadding, binary.BigEndian, &hashCode))
+		paddingLen = int(hashCode % 64)
+	}
+	if r.chunkMasking != nil {
+		var hashCode uint16
+		common.Must(binary.Read(r.chunkMasking, binary.BigEndian, &hashCode))
+		length ^= hashCode
+	}
+	dataLen := int(length)
+	if paddingLen > 0 {
+		dataLen -= paddingLen
+	}
+	if dataLen <= 0 {
+		err = E.Extend(ErrBadLengthChunk, "length=", length, ", padding=", paddingLen)
+		return
 	}
 	var readLen int
 	readLen = len(p)
-	if readLen > r.remaining {
-		readLen = r.remaining
+	if readLen > dataLen {
+		readLen = dataLen
+	} else if readLen < dataLen {
+		return 0, io.ErrShortBuffer
 	}
-	n, err = r.upstream.Read(p[:readLen])
-	r.remaining -= n
+	n, err = io.ReadFull(r.upstream, p[:readLen])
+	if err != nil {
+		return
+	}
+	_, err = io.CopyN(io.Discard, r.upstream, int64(paddingLen))
 	return
 }
 
@@ -107,20 +104,20 @@ func (w *StreamChunkWriter) Write(p []byte) (n int, err error) {
 			data = p
 			pLen = 0
 		}
-		dataLength := uint16(len(data))
+		dataLen := uint16(len(data))
 		var paddingLen uint16
 		if w.globalPadding != nil {
 			var hashCode uint16
 			common.Must(binary.Read(w.globalPadding, binary.BigEndian, &hashCode))
 			paddingLen = hashCode % 64
-			dataLength += paddingLen
+			dataLen += paddingLen
 		}
 		if w.chunkMasking != nil {
 			var hashCode uint16
 			common.Must(binary.Read(w.chunkMasking, binary.BigEndian, &hashCode))
-			dataLength ^= hashCode
+			dataLen ^= hashCode
 		}
-		err = binary.Write(w.upstream, binary.BigEndian, dataLength)
+		err = binary.Write(w.upstream, binary.BigEndian, dataLen)
 		if err != nil {
 			return
 		}

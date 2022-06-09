@@ -13,13 +13,11 @@ import (
 )
 
 type AEADChunkReader struct {
-	upstream         io.Reader
-	cipher           cipher.AEAD
-	globalPadding    sha3.ShakeHash
-	nonce            [12]byte
-	nonceCount       uint16
-	remaining        int
-	paddingRemaining int
+	upstream      io.Reader
+	cipher        cipher.AEAD
+	globalPadding sha3.ShakeHash
+	nonce         [12]byte
+	nonceCount    uint16
 }
 
 func NewAEADChunkReader(upstream io.Reader, cipher cipher.AEAD, nonce [12]byte, globalPadding sha3.ShakeHash) *AEADChunkReader {
@@ -40,54 +38,51 @@ func NewChacha20Poly1305ChunkReader(upstream io.Reader, key [16]byte, nonce [12]
 }
 
 func (r *AEADChunkReader) Read(p []byte) (n int, err error) {
-	if r.remaining == 0 {
-		if r.paddingRemaining > 0 {
-			_, err = io.CopyN(io.Discard, r.upstream, int64(r.paddingRemaining))
-			if err != nil {
-				return
-			}
-			r.paddingRemaining = 0
-		}
 
-		_lengthBuffer := buf.StackNewSize(2 + CipherOverhead)
-		lengthBuffer := common.Dup(_lengthBuffer)
-		_, err = lengthBuffer.ReadFullFrom(r.upstream, lengthBuffer.FreeLen())
-		if err != nil {
-			return
-		}
-		_, err = r.cipher.Open(lengthBuffer.Index(0), r.nonce[:], lengthBuffer.Bytes(), nil)
-		if err != nil {
-			return
-		}
-		r.nonceCount += 1
-		binary.BigEndian.PutUint16(r.nonce[:2], r.nonceCount)
-		var length uint16
-		err = binary.Read(lengthBuffer, binary.BigEndian, &length)
-		if err != nil {
-			return
-		}
-		length += CipherOverhead
-		lengthBuffer.Release()
-		common.KeepAlive(_lengthBuffer)
-		r.remaining = int(length)
-		if r.globalPadding != nil {
-			var hashCode uint16
-			common.Must(binary.Read(r.globalPadding, binary.BigEndian, &hashCode))
-			r.paddingRemaining = int(hashCode % 64)
-			r.remaining -= r.paddingRemaining
-		}
-		if r.remaining <= 0 {
-			err = E.Extend(ErrBadLengthChunk, "length=", length, ", padding=", r.paddingRemaining)
-			return
-		}
+	_lengthBuffer := buf.StackNewSize(2 + CipherOverhead)
+	lengthBuffer := common.Dup(_lengthBuffer)
+	_, err = lengthBuffer.ReadFullFrom(r.upstream, lengthBuffer.FreeLen())
+	if err != nil {
+		return
+	}
+	_, err = r.cipher.Open(lengthBuffer.Index(0), r.nonce[:], lengthBuffer.Bytes(), nil)
+	if err != nil {
+		return
+	}
+	r.nonceCount += 1
+	binary.BigEndian.PutUint16(r.nonce[:2], r.nonceCount)
+	var length uint16
+	err = binary.Read(lengthBuffer, binary.BigEndian, &length)
+	if err != nil {
+		return
+	}
+	length += CipherOverhead
+	lengthBuffer.Release()
+	common.KeepAlive(_lengthBuffer)
+	dataLen := int(length)
+	var paddingLen int
+	if r.globalPadding != nil {
+		var hashCode uint16
+		common.Must(binary.Read(r.globalPadding, binary.BigEndian, &hashCode))
+		paddingLen = int(hashCode % 64)
+		dataLen -= paddingLen
+	}
+	if dataLen <= 0 {
+		err = E.Extend(ErrBadLengthChunk, "length=", length, ", padding=", paddingLen)
+		return
 	}
 	var readLen int
 	readLen = len(p)
-	if readLen > r.remaining {
-		readLen = r.remaining
+	if readLen > dataLen {
+		readLen = dataLen
+	} else if readLen < dataLen {
+		return 0, io.ErrShortBuffer
 	}
-	n, err = r.upstream.Read(p[:readLen])
-	r.remaining -= n
+	n, err = io.ReadFull(r.upstream, p[:readLen])
+	if err != nil {
+		return
+	}
+	_, err = io.CopyN(io.Discard, r.upstream, int64(paddingLen))
 	return
 }
 
