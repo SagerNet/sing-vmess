@@ -27,7 +27,7 @@ func TestPlainStreamLengthChunkWriter(t *testing.T) {
 	defer common.Close(in, out)
 	reader := crypto.NewChunkStreamReader(crypto.PlainChunkSizeParser{}, in)
 	writer := vmess.NewStreamChunkWriter(out, nil, nil)
-	testWriter(t, reader, writer)
+	testWrite(t, reader, writer)
 }
 
 func TestMaskStreamLengthChunkReader(t *testing.T) {
@@ -72,7 +72,7 @@ func TestMaskStreamLengthChunkWriter(t *testing.T) {
 	masking.Write(nonce)
 	writer := vmess.NewStreamChunkWriter(out, masking, nil)
 
-	testWriter(t, reader, writer)
+	testWrite(t, reader, writer)
 }
 
 func TestPaddingStreamLengthChunkReader(t *testing.T) {
@@ -117,7 +117,7 @@ func TestPaddingStreamLengthChunkWriter(t *testing.T) {
 	padding.Write(nonce)
 	writer := vmess.NewStreamChunkWriter(out, nil, padding)
 
-	testWriter(t, reader, writer)
+	testWrite(t, reader, writer)
 }
 
 func TestMaskPaddingStreamLengthChunkReader(t *testing.T) {
@@ -164,22 +164,22 @@ func TestMaskPaddingStreamLengthChunkWriter(t *testing.T) {
 	masking.Write(nonce)
 	writer := vmess.NewStreamChunkWriter(out, masking, masking)
 
-	testWriter(t, reader, writer)
+	testWrite(t, reader, writer)
 }
 
 func testRead(t *testing.T, reader io.Reader, writer vBuf.Writer) {
 	go writer.WriteMultiBuffer(vBuf.MultiBuffer{vBuf.FromBytes([]byte("ping"))})
 	content := make([]byte, 4)
-	_, err := reader.Read(content)
+	_, err := io.ReadFull(reader, content)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(content) != "ping" {
-		t.Fatal("bad content")
+		t.Fatal("bad content: ", string(content))
 	}
 }
 
-func testWriter(t *testing.T, reader vBuf.Reader, writer io.Writer) {
+func testWrite(t *testing.T, reader vBuf.Reader, writer io.Writer) {
 	go func() {
 		_, err := writer.Write([]byte("ping"))
 		if err != nil {

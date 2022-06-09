@@ -2,6 +2,7 @@ package vmess
 
 import (
 	"crypto/aes"
+	"crypto/cipher"
 	"crypto/md5"
 	"encoding/binary"
 	"hash/crc32"
@@ -12,6 +13,7 @@ import (
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/buf"
 	M "github.com/sagernet/sing/common/metadata"
+	"golang.org/x/crypto/chacha20poly1305"
 )
 
 const (
@@ -91,4 +93,27 @@ func AutoSecurityType() int {
 		return SecurityTypeAes128Gcm
 	}
 	return SecurityTypeChacha20Poly1305
+}
+
+func GenerateChacha20Poly1305Key(b []byte) []byte {
+	key := make([]byte, 32)
+	t := md5.Sum(b)
+	copy(key, t[:])
+	t = md5.Sum(key[:16])
+	copy(key[16:], t[:])
+	return key
+}
+
+func newAes128Gcm(key []byte) cipher.AEAD {
+	block, err := aes.NewCipher(key)
+	common.Must(err)
+	outCipher, err := cipher.NewGCM(block)
+	common.Must(err)
+	return outCipher
+}
+
+func newChacha20Poly1305(key []byte) cipher.AEAD {
+	outCipher, err := chacha20poly1305.New(key)
+	common.Must(err)
+	return outCipher
 }
