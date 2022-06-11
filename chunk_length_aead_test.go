@@ -1,6 +1,7 @@
 package vmess_test
 
 import (
+	"crypto/rand"
 	"io"
 	"testing"
 
@@ -19,6 +20,8 @@ func TestAEADLengthChunkReader(t *testing.T) {
 
 	var key [16]byte
 	var nonce [12]byte
+	rand.Read(key[:])
+	rand.Read(nonce[:])
 
 	reader := vmess.NewAes128GcmChunkReader(in, key, nonce, nil)
 
@@ -48,6 +51,8 @@ func TestAEADLengthChunkWriter(t *testing.T) {
 
 	var key [16]byte
 	var nonce [12]byte
+	rand.Read(key[:])
+	rand.Read(nonce[:])
 
 	lengthKey := vmessaead.KDF16(key[:], "auth_len")
 	lengthCipher := crypto.NewAesGcm(lengthKey)
@@ -76,6 +81,8 @@ func TestPaddingAEADLengthChunkReader(t *testing.T) {
 
 	var key [16]byte
 	var nonce [12]byte
+	rand.Read(key[:])
+	rand.Read(nonce[:])
 
 	padding := sha3.NewShake128()
 	padding.Write(nonce[:])
@@ -107,6 +114,8 @@ func TestPaddingAEADLengthChunkWriter(t *testing.T) {
 
 	var key [16]byte
 	var nonce [12]byte
+	rand.Read(key[:])
+	rand.Read(nonce[:])
 
 	lengthKey := vmessaead.KDF16(key[:], "auth_len")
 	lengthCipher := crypto.NewAesGcm(lengthKey)

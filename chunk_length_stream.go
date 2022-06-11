@@ -74,65 +74,43 @@ type StreamChunkWriter struct {
 	upstream      io.Writer
 	chunkMasking  sha3.ShakeHash
 	globalPadding sha3.ShakeHash
-	maxPacketSize int
 }
 
 func NewStreamChunkWriter(upstream io.Writer, chunkMasking sha3.ShakeHash, globalPadding sha3.ShakeHash) *StreamChunkWriter {
-	maxPacketSize := 65535
-	if globalPadding != nil {
-		maxPacketSize -= 64
-	}
 	return &StreamChunkWriter{
 		upstream:      upstream,
 		chunkMasking:  chunkMasking,
 		globalPadding: globalPadding,
-		maxPacketSize: maxPacketSize,
 	}
 }
 
 func (w *StreamChunkWriter) Write(p []byte) (n int, err error) {
-	if len(p) == 0 {
+	dataLen := uint16(len(p))
+	var paddingLen uint16
+	if w.globalPadding != nil {
+		var hashCode uint16
+		common.Must(binary.Read(w.globalPadding, binary.BigEndian, &hashCode))
+		paddingLen = hashCode % 64
+		dataLen += paddingLen
+	}
+	if w.chunkMasking != nil {
+		var hashCode uint16
+		common.Must(binary.Read(w.chunkMasking, binary.BigEndian, &hashCode))
+		dataLen ^= hashCode
+	}
+	err = binary.Write(w.upstream, binary.BigEndian, dataLen)
+	if err != nil {
 		return
 	}
-
-	for pLen := len(p); pLen > 0; {
-		var data []byte
-		if pLen > w.maxPacketSize {
-			p = p[w.maxPacketSize:]
-			pLen -= w.maxPacketSize
-		} else {
-			data = p
-			pLen = 0
-		}
-		dataLen := uint16(len(data))
-		var paddingLen uint16
-		if w.globalPadding != nil {
-			var hashCode uint16
-			common.Must(binary.Read(w.globalPadding, binary.BigEndian, &hashCode))
-			paddingLen = hashCode % 64
-			dataLen += paddingLen
-		}
-		if w.chunkMasking != nil {
-			var hashCode uint16
-			common.Must(binary.Read(w.chunkMasking, binary.BigEndian, &hashCode))
-			dataLen ^= hashCode
-		}
-		err = binary.Write(w.upstream, binary.BigEndian, dataLen)
+	n, err = w.upstream.Write(p)
+	if err != nil {
+		return
+	}
+	if paddingLen > 0 {
+		_, err = io.CopyN(w.upstream, rand.Reader, int64(paddingLen))
 		if err != nil {
 			return
 		}
-		var writeN int
-		writeN, err = w.upstream.Write(data)
-		if err != nil {
-			return
-		}
-		if paddingLen > 0 {
-			_, err = io.CopyN(w.upstream, rand.Reader, int64(paddingLen))
-			if err != nil {
-				return
-			}
-		}
-		n += writeN
 	}
 	return
 }

@@ -191,6 +191,6 @@ func testWrite(t *testing.T, reader vBuf.Reader, writer io.Writer) {
 		t.Fatal(err)
 	}
 	if mb.String() != "ping" {
-		t.Fatal("bad content")
+		t.Fatal("bad content: ", mb.String())
 	}
 }
