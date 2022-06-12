@@ -16,24 +16,24 @@ type AEADChunkReader struct {
 	upstream      io.Reader
 	cipher        cipher.AEAD
 	globalPadding sha3.ShakeHash
-	nonce         [12]byte
+	nonce         []byte
 	nonceCount    uint16
 }
 
-func NewAEADChunkReader(upstream io.Reader, cipher cipher.AEAD, nonce [12]byte, globalPadding sha3.ShakeHash) *AEADChunkReader {
+func NewAEADChunkReader(upstream io.Reader, cipher cipher.AEAD, nonce []byte, globalPadding sha3.ShakeHash) *AEADChunkReader {
 	return &AEADChunkReader{
 		upstream:      upstream,
 		cipher:        cipher,
-		nonce:         nonce,
+		nonce:         nonce[:cipher.NonceSize()],
 		globalPadding: globalPadding,
 	}
 }
 
-func NewAes128GcmChunkReader(upstream io.Reader, key [16]byte, nonce [12]byte, globalPadding sha3.ShakeHash) *AEADChunkReader {
+func NewAes128GcmChunkReader(upstream io.Reader, key []byte, nonce []byte, globalPadding sha3.ShakeHash) *AEADChunkReader {
 	return NewAEADChunkReader(upstream, newAes128Gcm(KDF(key, "auth_len")[:16]), nonce, globalPadding)
 }
 
-func NewChacha20Poly1305ChunkReader(upstream io.Reader, key [16]byte, nonce [12]byte, globalPadding sha3.ShakeHash) *AEADChunkReader {
+func NewChacha20Poly1305ChunkReader(upstream io.Reader, key []byte, nonce []byte, globalPadding sha3.ShakeHash) *AEADChunkReader {
 	return NewAEADChunkReader(upstream, newChacha20Poly1305(GenerateChacha20Poly1305Key(KDF(key, "auth_len")[:16])), nonce, globalPadding)
 }
 
@@ -44,9 +44,9 @@ func (r *AEADChunkReader) Read(p []byte) (n int, err error) {
 	if err != nil {
 		return
 	}
-	binary.BigEndian.PutUint16(r.nonce[:2], r.nonceCount)
+	binary.BigEndian.PutUint16(r.nonce, r.nonceCount)
 	r.nonceCount += 1
-	_, err = r.cipher.Open(lengthBuffer.Index(0), r.nonce[:], lengthBuffer.Bytes(), nil)
+	_, err = r.cipher.Open(lengthBuffer.Index(0), r.nonce, lengthBuffer.Bytes(), nil)
 	if err != nil {
 		return
 	}
@@ -93,24 +93,24 @@ type AEADChunkWriter struct {
 	upstream      io.Writer
 	cipher        cipher.AEAD
 	globalPadding sha3.ShakeHash
-	nonce         [12]byte
+	nonce         []byte
 	nonceCount    uint16
 }
 
-func NewAEADChunkWriter(upstream io.Writer, cipher cipher.AEAD, nonce [12]byte, globalPadding sha3.ShakeHash) *AEADChunkWriter {
+func NewAEADChunkWriter(upstream io.Writer, cipher cipher.AEAD, nonce []byte, globalPadding sha3.ShakeHash) *AEADChunkWriter {
 	return &AEADChunkWriter{
 		upstream:      upstream,
 		cipher:        cipher,
-		nonce:         nonce,
+		nonce:         nonce[:cipher.NonceSize()],
 		globalPadding: globalPadding,
 	}
 }
 
-func NewAes128GcmChunkWriter(upstream io.Writer, key [16]byte, nonce [12]byte, globalPadding sha3.ShakeHash) *AEADChunkWriter {
+func NewAes128GcmChunkWriter(upstream io.Writer, key []byte, nonce []byte, globalPadding sha3.ShakeHash) *AEADChunkWriter {
 	return NewAEADChunkWriter(upstream, newAes128Gcm(KDF(key, "auth_len")[:16]), nonce, globalPadding)
 }
 
-func NewChacha20Poly1305ChunkWriter(upstream io.Writer, key [16]byte, nonce [12]byte, globalPadding sha3.ShakeHash) *AEADChunkWriter {
+func NewChacha20Poly1305ChunkWriter(upstream io.Writer, key []byte, nonce []byte, globalPadding sha3.ShakeHash) *AEADChunkWriter {
 	return NewAEADChunkWriter(upstream, newChacha20Poly1305(GenerateChacha20Poly1305Key(KDF(key, "auth_len")[:16])), nonce, globalPadding)
 }
 
@@ -129,9 +129,9 @@ func (w *AEADChunkWriter) Write(p []byte) (n int, err error) {
 	lengthBuffer := common.Dup(_lengthBuffer)
 	binary.BigEndian.PutUint16(lengthBuffer.Extend(2), dataLength)
 
-	binary.BigEndian.PutUint16(w.nonce[:2], w.nonceCount)
+	binary.BigEndian.PutUint16(w.nonce, w.nonceCount)
 	w.nonceCount += 1
-	w.cipher.Seal(lengthBuffer.Index(0), w.nonce[:], lengthBuffer.Bytes(), nil)
+	w.cipher.Seal(lengthBuffer.Index(0), w.nonce, lengthBuffer.Bytes(), nil)
 	lengthBuffer.Extend(CipherOverhead)
 
 	_, err = lengthBuffer.WriteTo(w.upstream)

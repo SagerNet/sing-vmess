@@ -6,14 +6,17 @@ import (
 	"crypto/md5"
 	"encoding/binary"
 	"hash/crc32"
+	"io"
 	"runtime"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/buf"
+	E "github.com/sagernet/sing/common/exceptions"
 	M "github.com/sagernet/sing/common/metadata"
 	"golang.org/x/crypto/chacha20poly1305"
+	"golang.org/x/crypto/sha3"
 )
 
 const (
@@ -62,6 +65,8 @@ const (
 	CipherOverhead = 16
 )
 
+var ErrUnsupportedSecurityType = E.New("unsupported security type")
+
 var AddressSerializer = M.NewSerializer(
 	M.AddressFamilyByte(0x01, M.AddressFamilyIPv4),
 	M.AddressFamilyByte(0x03, M.AddressFamilyIPv6),
@@ -77,12 +82,12 @@ func Key(uuid uuid.UUID) (key [16]byte) {
 	return
 }
 
-func AuthID(key [16]byte, time time.Time, buffer *buf.Buffer) {
+func AuthID(key []byte, time time.Time, buffer *buf.Buffer) {
 	common.Must(binary.Write(buffer, binary.BigEndian, time.Unix()))
 	buffer.WriteRandom(4)
 	checksum := crc32.ChecksumIEEE(buffer.Bytes())
 	common.Must(binary.Write(buffer, binary.BigEndian, checksum))
-	aesBlock, err := aes.NewCipher(common.Dup(key[:]))
+	aesBlock, err := aes.NewCipher(common.Dup(key))
 	common.Must(err)
 	common.KeepAlive(key)
 	aesBlock.Encrypt(buffer.Bytes(), buffer.Bytes())
@@ -102,6 +107,104 @@ func GenerateChacha20Poly1305Key(b []byte) []byte {
 	t = md5.Sum(key[:16])
 	copy(key[16:], t[:])
 	return key
+}
+
+func CreateReader(upstream io.Reader, key []byte, nonce []byte, command byte, security byte, option byte) io.Reader {
+	switch security {
+	case SecurityTypeNone:
+		if option&RequestOptionChunkStream != 0 || command == CommandUDP {
+			return NewStreamChunkReader(upstream, nil, nil)
+		} else {
+			return upstream
+		}
+	case SecurityTypeAes128Gcm:
+		var chunkReader io.Reader
+		var globalPadding sha3.ShakeHash
+		if option&RequestOptionGlobalPadding != 0 {
+			globalPadding = sha3.NewShake128()
+			common.Must1(globalPadding.Write(nonce))
+		}
+		if option&RequestOptionAuthenticatedLength != 0 {
+			chunkReader = NewAes128GcmChunkReader(upstream, key, nonce, globalPadding)
+		} else {
+			var chunkMasking sha3.ShakeHash
+			if option&RequestOptionChunkMasking != 0 {
+				chunkMasking = sha3.NewShake128()
+				common.Must1(chunkMasking.Write(nonce))
+			}
+			chunkReader = NewStreamChunkReader(upstream, chunkMasking, globalPadding)
+		}
+		return NewAes128GcmReader(chunkReader, key, nonce)
+	case SecurityTypeChacha20Poly1305:
+		var chunkReader io.Reader
+		var globalPadding sha3.ShakeHash
+		if option&RequestOptionGlobalPadding != 0 {
+			globalPadding = sha3.NewShake128()
+			common.Must1(globalPadding.Write(nonce))
+		}
+		if option&RequestOptionAuthenticatedLength != 0 {
+			chunkReader = NewChacha20Poly1305ChunkReader(upstream, key, nonce, globalPadding)
+		} else {
+			var chunkMasking sha3.ShakeHash
+			if option&RequestOptionChunkMasking != 0 {
+				chunkMasking = sha3.NewShake128()
+				common.Must1(chunkMasking.Write(nonce))
+			}
+			chunkReader = NewStreamChunkReader(upstream, chunkMasking, globalPadding)
+		}
+		return NewChacha20Poly1305Reader(chunkReader, key, nonce)
+	default:
+		panic("unexpected security type")
+	}
+}
+
+func CreateWriter(upstream io.Writer, key []byte, nonce []byte, command byte, security byte, option byte) io.Writer {
+	switch security {
+	case SecurityTypeNone:
+		if option&RequestOptionChunkStream != 0 || command == CommandUDP {
+			return NewStreamChunkWriter(upstream, nil, nil)
+		} else {
+			return upstream
+		}
+	case SecurityTypeAes128Gcm:
+		var chunkWriter io.Writer
+		var globalPadding sha3.ShakeHash
+		if option&RequestOptionGlobalPadding != 0 {
+			globalPadding = sha3.NewShake128()
+			common.Must1(globalPadding.Write(nonce))
+		}
+		if option&RequestOptionAuthenticatedLength != 0 {
+			chunkWriter = NewAes128GcmChunkWriter(upstream, key, nonce, globalPadding)
+		} else {
+			var chunkMasking sha3.ShakeHash
+			if option&RequestOptionChunkMasking != 0 {
+				chunkMasking = sha3.NewShake128()
+				common.Must1(chunkMasking.Write(nonce))
+			}
+			chunkWriter = NewStreamChunkWriter(upstream, chunkMasking, globalPadding)
+		}
+		return NewAes128GcmWriter(chunkWriter, key, nonce)
+	case SecurityTypeChacha20Poly1305:
+		var chunkWriter io.Writer
+		var globalPadding sha3.ShakeHash
+		if option&RequestOptionGlobalPadding != 0 {
+			globalPadding = sha3.NewShake128()
+			common.Must1(globalPadding.Write(nonce))
+		}
+		if option&RequestOptionAuthenticatedLength != 0 {
+			chunkWriter = NewChacha20Poly1305ChunkWriter(upstream, key, nonce, globalPadding)
+		} else {
+			var chunkMasking sha3.ShakeHash
+			if option&RequestOptionChunkMasking != 0 {
+				chunkMasking = sha3.NewShake128()
+				common.Must1(chunkMasking.Write(nonce))
+			}
+			chunkWriter = NewStreamChunkWriter(upstream, chunkMasking, globalPadding)
+		}
+		return NewChacha20Poly1305Writer(chunkWriter, key, nonce)
+	default:
+		panic("unexpected security type")
+	}
 }
 
 func newAes128Gcm(key []byte) cipher.AEAD {

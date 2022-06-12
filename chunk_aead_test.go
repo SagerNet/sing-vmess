@@ -1,7 +1,6 @@
 package vmess_test
 
 import (
-	"crypto/rand"
 	"io"
 	"testing"
 
@@ -19,15 +18,18 @@ func TestAEADReader(t *testing.T) {
 	in, out := io.Pipe()
 	defer common.Close(in, out)
 
-	var key [16]byte
-	var nonce [12]byte
-	rand.Read(key[:])
-	rand.Read(nonce[:])
+	readBuffer := buf.New()
+	defer readBuffer.Release()
+
+	randBuffer := buf.New()
+	defer randBuffer.Release()
+
+	key := randBuffer.WriteRandom(16)
+	nonce := randBuffer.WriteRandom(12)
 
 	chunkReader := vmess.NewAes128GcmChunkReader(in, key, nonce, nil)
 	cipherReader := vmess.NewAes128GcmReader(chunkReader, key, nonce)
-	readBuffer := buf.New()
-	defer readBuffer.Release()
+
 	reader := bufio.NewBufferedReader(cipherReader, readBuffer)
 
 	lengthKey := vmessaead.KDF16(key[:], "auth_len")
@@ -56,10 +58,11 @@ func TestAEADWriter(t *testing.T) {
 	in, out := io.Pipe()
 	defer common.Close(in, out)
 
-	var key [16]byte
-	var nonce [12]byte
-	rand.Read(key[:])
-	rand.Read(nonce[:])
+	randBuffer := buf.New()
+	defer randBuffer.Release()
+
+	key := randBuffer.WriteRandom(16)
+	nonce := randBuffer.WriteRandom(12)
 
 	lengthKey := vmessaead.KDF16(key[:], "auth_len")
 	lengthCipher := crypto.NewAesGcm(lengthKey)

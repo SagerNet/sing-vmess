@@ -1,12 +1,12 @@
 package vmess_test
 
 import (
-	"crypto/rand"
 	"io"
 	"testing"
 
 	"github.com/sagernet/sing-vmess"
 	"github.com/sagernet/sing/common"
+	"github.com/sagernet/sing/common/buf"
 	"github.com/v2fly/v2ray-core/v5/common/crypto"
 	"github.com/v2fly/v2ray-core/v5/common/protocol"
 	vmessaead "github.com/v2fly/v2ray-core/v5/proxy/vmess/aead"
@@ -18,10 +18,11 @@ func TestAEADLengthChunkReader(t *testing.T) {
 	in, out := io.Pipe()
 	defer common.Close(in, out)
 
-	var key [16]byte
-	var nonce [12]byte
-	rand.Read(key[:])
-	rand.Read(nonce[:])
+	randBuffer := buf.New()
+	defer randBuffer.Release()
+
+	key := randBuffer.WriteRandom(16)
+	nonce := randBuffer.WriteRandom(12)
 
 	reader := vmess.NewAes128GcmChunkReader(in, key, nonce, nil)
 
@@ -49,10 +50,11 @@ func TestAEADLengthChunkWriter(t *testing.T) {
 	in, out := io.Pipe()
 	defer common.Close(in, out)
 
-	var key [16]byte
-	var nonce [12]byte
-	rand.Read(key[:])
-	rand.Read(nonce[:])
+	randBuffer := buf.New()
+	defer randBuffer.Release()
+
+	key := randBuffer.WriteRandom(16)
+	nonce := randBuffer.WriteRandom(12)
 
 	lengthKey := vmessaead.KDF16(key[:], "auth_len")
 	lengthCipher := crypto.NewAesGcm(lengthKey)
@@ -79,10 +81,11 @@ func TestPaddingAEADLengthChunkReader(t *testing.T) {
 	in, out := io.Pipe()
 	defer common.Close(in, out)
 
-	var key [16]byte
-	var nonce [12]byte
-	rand.Read(key[:])
-	rand.Read(nonce[:])
+	randBuffer := buf.New()
+	defer randBuffer.Release()
+
+	key := randBuffer.WriteRandom(16)
+	nonce := randBuffer.WriteRandom(12)
 
 	padding := sha3.NewShake128()
 	padding.Write(nonce[:])
@@ -112,10 +115,11 @@ func TestPaddingAEADLengthChunkWriter(t *testing.T) {
 	in, out := io.Pipe()
 	defer common.Close(in, out)
 
-	var key [16]byte
-	var nonce [12]byte
-	rand.Read(key[:])
-	rand.Read(nonce[:])
+	randBuffer := buf.New()
+	defer randBuffer.Release()
+
+	key := randBuffer.WriteRandom(16)
+	nonce := randBuffer.WriteRandom(12)
 
 	lengthKey := vmessaead.KDF16(key[:], "auth_len")
 	lengthCipher := crypto.NewAesGcm(lengthKey)

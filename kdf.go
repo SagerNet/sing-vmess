@@ -6,14 +6,14 @@ import (
 	"hash"
 )
 
-func KDF(key [16]byte, salt string, path ...[]byte) []byte {
+func KDF(key []byte, salt string, path ...[]byte) []byte {
 	hmacCreator := &hMacCreator{value: []byte(KDFSaltConstVMessAEADKDF)}
 	hmacCreator = &hMacCreator{value: []byte(salt), parent: hmacCreator}
 	for _, v := range path {
 		hmacCreator = &hMacCreator{value: v, parent: hmacCreator}
 	}
 	hmacf := hmacCreator.Create()
-	hmacf.Write(key[:])
+	hmacf.Write(key)
 	return hmacf.Sum(nil)
 }
 

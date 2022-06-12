@@ -14,23 +14,23 @@ import (
 type AEADReader struct {
 	upstream   N.ExtendedReader
 	cipher     cipher.AEAD
-	nonce      [12]byte
+	nonce      []byte
 	nonceCount uint16
 }
 
-func NewAEADReader(upstream io.Reader, cipher cipher.AEAD, nonce [12]byte) *AEADReader {
+func NewAEADReader(upstream io.Reader, cipher cipher.AEAD, nonce []byte) *AEADReader {
 	return &AEADReader{
 		upstream: bufio.NewExtendedReader(upstream),
 		cipher:   cipher,
-		nonce:    nonce,
+		nonce:    nonce[:cipher.NonceSize()],
 	}
 }
 
-func NewAes128GcmReader(upstream io.Reader, key [16]byte, nonce [12]byte) *AEADReader {
+func NewAes128GcmReader(upstream io.Reader, key []byte, nonce []byte) *AEADReader {
 	return NewAEADReader(upstream, newAes128Gcm(key[:]), nonce)
 }
 
-func NewChacha20Poly1305Reader(upstream io.Reader, key [16]byte, nonce [12]byte) *AEADReader {
+func NewChacha20Poly1305Reader(upstream io.Reader, key []byte, nonce []byte) *AEADReader {
 	return NewAEADReader(upstream, newChacha20Poly1305(GenerateChacha20Poly1305Key(key[:])), nonce)
 }
 
@@ -39,9 +39,9 @@ func (r *AEADReader) Read(p []byte) (n int, err error) {
 	if err != nil {
 		return
 	}
-	binary.BigEndian.PutUint16(r.nonce[:2], r.nonceCount)
+	binary.BigEndian.PutUint16(r.nonce, r.nonceCount)
 	r.nonceCount += 1
-	_, err = r.cipher.Open(p[:0], r.nonce[:], p[:n], nil)
+	_, err = r.cipher.Open(p[:0], r.nonce, p[:n], nil)
 	if err != nil {
 		return
 	}
@@ -54,9 +54,9 @@ func (r *AEADReader) ReadBuffer(buffer *buf.Buffer) error {
 	if err != nil {
 		return err
 	}
-	binary.BigEndian.PutUint16(r.nonce[:2], r.nonceCount)
+	binary.BigEndian.PutUint16(r.nonce, r.nonceCount)
 	r.nonceCount += 1
-	_, err = r.cipher.Open(buffer.Index(0), r.nonce[:], buffer.Bytes(), nil)
+	_, err = r.cipher.Open(buffer.Index(0), r.nonce, buffer.Bytes(), nil)
 	if err != nil {
 		return err
 	}
@@ -71,41 +71,46 @@ func (r *AEADReader) Upstream() any {
 type AEADWriter struct {
 	upstream   N.ExtendedWriter
 	cipher     cipher.AEAD
-	nonce      [12]byte
+	nonce      []byte
 	nonceCount uint16
 }
 
-func NewAEADWriter(upstream io.Writer, cipher cipher.AEAD, nonce [12]byte) *AEADWriter {
+func NewAEADWriter(upstream io.Writer, cipher cipher.AEAD, nonce []byte) *AEADWriter {
 	return &AEADWriter{
 		upstream: bufio.NewExtendedWriter(upstream),
 		cipher:   cipher,
-		nonce:    nonce,
+		nonce:    nonce[:cipher.NonceSize()],
 	}
 }
 
-func NewAes128GcmWriter(upstream io.Writer, key [16]byte, nonce [12]byte) *AEADWriter {
-	return NewAEADWriter(upstream, newAes128Gcm(key[:]), nonce)
+func NewAes128GcmWriter(upstream io.Writer, key []byte, nonce []byte) *AEADWriter {
+	return NewAEADWriter(upstream, newAes128Gcm(key), nonce)
 }
 
-func NewChacha20Poly1305Writer(upstream io.Writer, key [16]byte, nonce [12]byte) *AEADWriter {
-	return NewAEADWriter(upstream, newChacha20Poly1305(GenerateChacha20Poly1305Key(key[:])), nonce)
+func NewChacha20Poly1305Writer(upstream io.Writer, key []byte, nonce []byte) *AEADWriter {
+	return NewAEADWriter(upstream, newChacha20Poly1305(GenerateChacha20Poly1305Key(key)), nonce)
 }
 
 func (w *AEADWriter) Write(p []byte) (n int, err error) {
 	_buffer := buf.StackNewSize(len(p) + CipherOverhead)
 	defer common.KeepAlive(_buffer)
 	buffer := common.Dup(_buffer)
-	binary.BigEndian.PutUint16(w.nonce[:2], w.nonceCount)
+	defer buffer.Release()
+	binary.BigEndian.PutUint16(w.nonce, w.nonceCount)
 	w.nonceCount += 1
-	w.cipher.Seal(buffer.Index(0), w.nonce[:], p, nil)
+	w.cipher.Seal(buffer.Index(0), w.nonce, p, nil)
 	buffer.Truncate(buffer.FreeLen())
-	return bufio.Write(w.upstream, buffer)
+	_, err = w.upstream.Write(buffer.Bytes())
+	if err == nil {
+		n = len(p)
+	}
+	return
 }
 
 func (w *AEADWriter) WriteBuffer(buffer *buf.Buffer) error {
-	binary.BigEndian.PutUint16(w.nonce[:2], w.nonceCount)
+	binary.BigEndian.PutUint16(w.nonce, w.nonceCount)
 	w.nonceCount += 1
-	w.cipher.Seal(buffer.Index(0), w.nonce[:], buffer.Bytes(), nil)
+	w.cipher.Seal(buffer.Index(0), w.nonce, buffer.Bytes(), nil)
 	buffer.Extend(CipherOverhead)
 	return w.upstream.WriteBuffer(buffer)
 }
