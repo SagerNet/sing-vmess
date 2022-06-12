@@ -1,8 +1,6 @@
 package vmess
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
@@ -106,14 +104,12 @@ func (c *Client) dialRaw(upstream net.Conn, command byte, destination M.Socksadd
 			option = RequestOptionChunkStream
 		}
 	case SecurityTypeAes128Gcm, SecurityTypeChacha20Poly1305:
-		option = RequestOptionChunkStream
+		option = RequestOptionChunkStream | RequestOptionChunkMasking
 		if c.globalPadding {
 			option |= RequestOptionGlobalPadding
 		}
 		if c.authenticatedLength {
 			option |= RequestOptionAuthenticatedLength
-		} else {
-			option |= RequestOptionChunkMasking
 		}
 	}
 
@@ -157,19 +153,15 @@ func (c *rawClientConn) writeHandshake() error {
 	AuthID(c.key, time.Now(), requestBuffer)
 	authId := requestBuffer.Bytes()
 
-	headerLenBuffer := buf.With(requestBuffer.ExtendHeader(headerLenBufferLen))
+	headerLenBuffer := buf.With(requestBuffer.Extend(headerLenBufferLen))
 	connectionNonce := requestBuffer.WriteRandom(8)
 
 	common.Must(binary.Write(headerLenBuffer, binary.BigEndian, uint16(headerLen)))
 	lengthKey := KDF(c.key[:], KDFSaltConstVMessHeaderPayloadLengthAEADKey, authId, connectionNonce)[:16]
 	lengthNonce := KDF(c.key[:], KDFSaltConstVMessHeaderPayloadLengthAEADIV, authId, connectionNonce)[:12]
-	lengthBlock, err := aes.NewCipher(lengthKey)
-	common.Must(err)
-	lengthCipher, err := cipher.NewGCM(lengthBlock)
-	common.Must(err)
-	lengthCipher.Seal(headerLenBuffer.Index(0), lengthNonce, headerLenBuffer.Bytes(), authId)
+	newAesGcm(lengthKey).Seal(headerLenBuffer.Index(0), lengthNonce, headerLenBuffer.Bytes(), authId)
 
-	headerBuffer := buf.With(requestBuffer.Extend(headerLen))
+	headerBuffer := buf.With(requestBuffer.Extend(headerLen + CipherOverhead))
 	common.Must(headerBuffer.WriteByte(Version))
 	requestNonce := c.requestNonce[:]
 	common.Must1(headerBuffer.Write(requestNonce))
@@ -185,7 +177,7 @@ func (c *rawClientConn) writeHandshake() error {
 		common.Must(AddressSerializer.WriteAddrPort(headerBuffer, c.destination))
 	}
 	if paddingLen > 0 {
-		headerBuffer.ExtendHeader(paddingLen)
+		headerBuffer.Extend(paddingLen)
 	}
 	headerHash := fnv.New32a()
 	common.Must1(headerHash.Write(headerBuffer.Bytes()))
@@ -193,13 +185,9 @@ func (c *rawClientConn) writeHandshake() error {
 
 	headerKey := KDF(c.key[:], KDFSaltConstVMessHeaderPayloadAEADKey, authId, connectionNonce)[:16]
 	headerNonce := KDF(c.key[:], KDFSaltConstVMessHeaderPayloadAEADIV, authId, connectionNonce)[:12]
-	headerBlock, err := aes.NewCipher(headerKey)
-	common.Must(err)
-	headerCipher, err := cipher.NewGCM(headerBlock)
-	common.Must(err)
-	headerCipher.Seal(headerBuffer.Index(0), headerNonce, headerBuffer.Bytes(), authId[:])
+	newAesGcm(headerKey).Seal(headerBuffer.Index(0), headerNonce, headerBuffer.Bytes(), authId[:])
 
-	_, err = c.Conn.Write(requestBuffer.Bytes())
+	_, err := c.Conn.Write(requestBuffer.Bytes())
 	if err != nil {
 		return err
 	}
@@ -215,7 +203,7 @@ func (c *rawClientConn) readResponse() error {
 
 	headerLenKey := KDF(responseKey, KDFSaltConstAEADRespHeaderLenKey)[:16]
 	headerLenNonce := KDF(responseNonce, KDFSaltConstAEADRespHeaderLenIV)[:12]
-	headerLenCipher := newAes128Gcm(headerLenKey)
+	headerLenCipher := newAesGcm(headerLenKey)
 
 	_headerLenBuffer := buf.StackNewSize(2 + CipherOverhead)
 	defer common.KeepAlive(_headerLenBuffer)
@@ -240,7 +228,7 @@ func (c *rawClientConn) readResponse() error {
 
 	headerKey := KDF(responseKey, KDFSaltConstAEADRespHeaderPayloadKey)[:16]
 	headerNonce := KDF(responseNonce, KDFSaltConstAEADRespHeaderPayloadIV)[:12]
-	headerCipher := newAes128Gcm(headerKey)
+	headerCipher := newAesGcm(headerKey)
 
 	_headerBuffer := buf.StackNewSize(int(headerLen) + CipherOverhead)
 	defer common.KeepAlive(_headerBuffer)

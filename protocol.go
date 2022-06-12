@@ -85,9 +85,8 @@ func Key(uuid uuid.UUID) (key [16]byte) {
 func AuthID(key [16]byte, time time.Time, buffer *buf.Buffer) {
 	common.Must(binary.Write(buffer, binary.BigEndian, time.Unix()))
 	buffer.WriteRandom(4)
-	checksum := crc32.ChecksumIEEE(buffer.Bytes())
-	common.Must(binary.Write(buffer, binary.BigEndian, checksum))
-	aesBlock, err := aes.NewCipher(common.Dup(key[:]))
+	common.Must(binary.Write(buffer, binary.BigEndian, crc32.ChecksumIEEE(buffer.Bytes())))
+	aesBlock, err := aes.NewCipher(KDF(key[:], KDFSaltConstAuthIDEncryptionKey)[:16])
 	common.Must(err)
 	common.KeepAlive(key)
 	aesBlock.Encrypt(buffer.Bytes(), buffer.Bytes())
@@ -102,10 +101,10 @@ func AutoSecurityType() byte {
 
 func GenerateChacha20Poly1305Key(b []byte) []byte {
 	key := make([]byte, 32)
-	t := md5.Sum(b)
-	copy(key, t[:])
-	t = md5.Sum(key[:16])
-	copy(key[16:], t[:])
+	checksum := md5.Sum(b)
+	copy(key, checksum[:])
+	checksum = md5.Sum(key[:16])
+	copy(key[16:], checksum[:])
 	return key
 }
 
@@ -129,8 +128,12 @@ func CreateReader(upstream io.Reader, key []byte, nonce []byte, security byte, o
 		} else {
 			var chunkMasking sha3.ShakeHash
 			if option&RequestOptionChunkMasking != 0 {
-				chunkMasking = sha3.NewShake128()
-				common.Must1(chunkMasking.Write(nonce))
+				if globalPadding != nil {
+					chunkMasking = globalPadding
+				} else {
+					chunkMasking = sha3.NewShake128()
+					common.Must1(chunkMasking.Write(nonce))
+				}
 			}
 			chunkReader = NewStreamChunkReader(upstream, chunkMasking, globalPadding)
 		}
@@ -147,8 +150,12 @@ func CreateReader(upstream io.Reader, key []byte, nonce []byte, security byte, o
 		} else {
 			var chunkMasking sha3.ShakeHash
 			if option&RequestOptionChunkMasking != 0 {
-				chunkMasking = sha3.NewShake128()
-				common.Must1(chunkMasking.Write(nonce))
+				if globalPadding != nil {
+					chunkMasking = globalPadding
+				} else {
+					chunkMasking = sha3.NewShake128()
+					common.Must1(chunkMasking.Write(nonce))
+				}
 			}
 			chunkReader = NewStreamChunkReader(upstream, chunkMasking, globalPadding)
 		}
@@ -178,8 +185,12 @@ func CreateWriter(upstream io.Writer, key []byte, nonce []byte, security byte, o
 		} else {
 			var chunkMasking sha3.ShakeHash
 			if option&RequestOptionChunkMasking != 0 {
-				chunkMasking = sha3.NewShake128()
-				common.Must1(chunkMasking.Write(nonce))
+				if globalPadding != nil {
+					chunkMasking = globalPadding
+				} else {
+					chunkMasking = sha3.NewShake128()
+					common.Must1(chunkMasking.Write(nonce))
+				}
 			}
 			chunkWriter = NewStreamChunkWriter(upstream, chunkMasking, globalPadding)
 		}
@@ -196,8 +207,12 @@ func CreateWriter(upstream io.Writer, key []byte, nonce []byte, security byte, o
 		} else {
 			var chunkMasking sha3.ShakeHash
 			if option&RequestOptionChunkMasking != 0 {
-				chunkMasking = sha3.NewShake128()
-				common.Must1(chunkMasking.Write(nonce))
+				if globalPadding != nil {
+					chunkMasking = globalPadding
+				} else {
+					chunkMasking = sha3.NewShake128()
+					common.Must1(chunkMasking.Write(nonce))
+				}
 			}
 			chunkWriter = NewStreamChunkWriter(upstream, chunkMasking, globalPadding)
 		}
@@ -207,7 +222,7 @@ func CreateWriter(upstream io.Writer, key []byte, nonce []byte, security byte, o
 	}
 }
 
-func newAes128Gcm(key []byte) cipher.AEAD {
+func newAesGcm(key []byte) cipher.AEAD {
 	block, err := aes.NewCipher(key)
 	common.Must(err)
 	outCipher, err := cipher.NewGCM(block)

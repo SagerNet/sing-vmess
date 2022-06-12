@@ -30,7 +30,7 @@ func NewAEADChunkReader(upstream io.Reader, cipher cipher.AEAD, nonce []byte, gl
 }
 
 func NewAes128GcmChunkReader(upstream io.Reader, key []byte, nonce []byte, globalPadding sha3.ShakeHash) *AEADChunkReader {
-	return NewAEADChunkReader(upstream, newAes128Gcm(KDF(key, "auth_len")[:16]), nonce, globalPadding)
+	return NewAEADChunkReader(upstream, newAesGcm(KDF(key, "auth_len")[:16]), nonce, globalPadding)
 }
 
 func NewChacha20Poly1305ChunkReader(upstream io.Reader, key []byte, nonce []byte, globalPadding sha3.ShakeHash) *AEADChunkReader {
@@ -107,7 +107,7 @@ func NewAEADChunkWriter(upstream io.Writer, cipher cipher.AEAD, nonce []byte, gl
 }
 
 func NewAes128GcmChunkWriter(upstream io.Writer, key []byte, nonce []byte, globalPadding sha3.ShakeHash) *AEADChunkWriter {
-	return NewAEADChunkWriter(upstream, newAes128Gcm(KDF(key, "auth_len")[:16]), nonce, globalPadding)
+	return NewAEADChunkWriter(upstream, newAesGcm(KDF(key, "auth_len")[:16]), nonce, globalPadding)
 }
 
 func NewChacha20Poly1305ChunkWriter(upstream io.Writer, key []byte, nonce []byte, globalPadding sha3.ShakeHash) *AEADChunkWriter {

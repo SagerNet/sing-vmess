@@ -27,7 +27,7 @@ func NewAEADReader(upstream io.Reader, cipher cipher.AEAD, nonce []byte) *AEADRe
 }
 
 func NewAes128GcmReader(upstream io.Reader, key []byte, nonce []byte) *AEADReader {
-	return NewAEADReader(upstream, newAes128Gcm(key[:]), nonce)
+	return NewAEADReader(upstream, newAesGcm(key[:]), nonce)
 }
 
 func NewChacha20Poly1305Reader(upstream io.Reader, key []byte, nonce []byte) *AEADReader {
@@ -84,7 +84,7 @@ func NewAEADWriter(upstream io.Writer, cipher cipher.AEAD, nonce []byte) *AEADWr
 }
 
 func NewAes128GcmWriter(upstream io.Writer, key []byte, nonce []byte) *AEADWriter {
-	return NewAEADWriter(upstream, newAes128Gcm(key), nonce)
+	return NewAEADWriter(upstream, newAesGcm(key), nonce)
 }
 
 func NewChacha20Poly1305Writer(upstream io.Writer, key []byte, nonce []byte) *AEADWriter {
