@@ -4,6 +4,8 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"hash"
+
+	"github.com/sagernet/sing/common"
 )
 
 func KDF(key []byte, salt string, path ...[]byte) []byte {
@@ -13,7 +15,7 @@ func KDF(key []byte, salt string, path ...[]byte) []byte {
 		hmacCreator = &hMacCreator{value: v, parent: hmacCreator}
 	}
 	hmacf := hmacCreator.Create()
-	hmacf.Write(key)
+	hmacf.Write(common.Dup(key))
 	return hmacf.Sum(nil)
 }
 

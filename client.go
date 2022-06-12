@@ -12,32 +12,62 @@ import (
 	"net"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/buf"
 	"github.com/sagernet/sing/common/bufio"
+	E "github.com/sagernet/sing/common/exceptions"
 	M "github.com/sagernet/sing/common/metadata"
-	vmessaead "github.com/v2fly/v2ray-core/v5/proxy/vmess/aead"
+	N "github.com/sagernet/sing/common/network"
 )
 
 type Client struct {
-	key                 []byte
+	key                 [16]byte
 	security            byte
 	globalPadding       bool
 	authenticatedLength bool
 }
 
-func (c *Client) NeedBuffer() bool {
-	switch c.security {
-	case SecurityTypeAes128Gcm, SecurityTypeChacha20Poly1305:
-		return true
+func NewClient(uuid uuid.UUID, security string, options ...ClientOption) (*Client, error) {
+	var rawSecurity byte
+	switch security {
+	case "auto":
+		rawSecurity = AutoSecurityType()
+	case "none", "zero":
+		rawSecurity = SecurityTypeNone
+	case "aes-128-gcm":
+		rawSecurity = SecurityTypeAes128Gcm
+	case "chacha20-poly1305":
+		rawSecurity = SecurityTypeChacha20Poly1305
 	default:
-		return false
+		return nil, E.Extend(ErrUnsupportedSecurityType, security)
 	}
+	client := &Client{
+		key:      Key(uuid),
+		security: rawSecurity,
+	}
+	for _, option := range options {
+		option(client)
+	}
+	return client, nil
 }
 
-type clientConn struct {
+func (c *Client) DialConn(upstream net.Conn, destination M.Socksaddr) (N.ExtendedConn, error) {
+	conn := &clientConn{c.dialRaw(upstream, CommandTCP, destination)}
+	return conn, conn.writeHandshake()
+}
+
+func (c *Client) DialEarlyConn(upstream net.Conn, destination M.Socksaddr) N.ExtendedConn {
+	return &clientConn{c.dialRaw(upstream, CommandTCP, destination)}
+}
+
+func (c *Client) DialPacketConn(upstream net.Conn, destination M.Socksaddr) N.NetPacketConn {
+	return &clientPacketConn{c.dialRaw(upstream, CommandTCP, destination), destination}
+}
+
+type rawClientConn struct {
 	*Client
-	upstream    net.Conn
+	net.Conn
 	command     byte
 	security    byte
 	option      byte
@@ -45,28 +75,30 @@ type clientConn struct {
 
 	requestKey   [16]byte
 	requestNonce [16]byte
-	reader       io.Reader
-	readBuffer   *buf.Buffer
-	writer       io.Writer
+
+	readBuffer *buf.Buffer
+	reader     N.ExtendedReader
+	writer     N.ExtendedWriter
 }
 
-func (c *Client) dialClient(upstream net.Conn, command byte, destination M.Socksaddr, readBuffer *buf.Buffer) *clientConn {
-	var conn clientConn
-	conn.Client = c
-	conn.upstream = upstream
-	conn.command = command
-	conn.destination = destination
+func (c *Client) dialRaw(upstream net.Conn, command byte, destination M.Socksaddr) rawClientConn {
+	var readBuffer *buf.Buffer
+	if command == CommandTCP && c.security != SecurityTypeNone {
+		readBuffer = buf.New()
+	}
+
+	conn := rawClientConn{
+		Client:      c,
+		Conn:        upstream,
+		command:     command,
+		destination: destination,
+		readBuffer:  readBuffer,
+	}
 	common.Must1(io.ReadFull(rand.Reader, conn.requestKey[:]))
 	common.Must1(io.ReadFull(rand.Reader, conn.requestNonce[:]))
 
 	security := c.security
 	var option byte
-
-	if security != SecurityTypeNone {
-		conn.readBuffer = readBuffer
-	} else {
-		readBuffer.Release()
-	}
 
 	switch security {
 	case SecurityTypeNone:
@@ -87,10 +119,10 @@ func (c *Client) dialClient(upstream net.Conn, command byte, destination M.Socks
 
 	conn.security = security
 	conn.option = option
-	return &conn
+	return conn
 }
 
-func (c *clientConn) writeHandshake() error {
+func (c *rawClientConn) writeHandshake() error {
 	const enableMux = false
 	paddingLen := mRand.Intn(16)
 
@@ -129,8 +161,8 @@ func (c *clientConn) writeHandshake() error {
 	connectionNonce := requestBuffer.WriteRandom(8)
 
 	common.Must(binary.Write(headerLenBuffer, binary.BigEndian, uint16(headerLen)))
-	lengthKey := KDF(c.key, KDFSaltConstVMessHeaderPayloadLengthAEADKey, authId, connectionNonce)[:16]
-	lengthNonce := KDF(c.key, KDFSaltConstVMessHeaderPayloadLengthAEADIV, authId, connectionNonce)[:12]
+	lengthKey := KDF(c.key[:], KDFSaltConstVMessHeaderPayloadLengthAEADKey, authId, connectionNonce)[:16]
+	lengthNonce := KDF(c.key[:], KDFSaltConstVMessHeaderPayloadLengthAEADIV, authId, connectionNonce)[:12]
 	lengthBlock, err := aes.NewCipher(lengthKey)
 	common.Must(err)
 	lengthCipher, err := cipher.NewGCM(lengthBlock)
@@ -159,30 +191,30 @@ func (c *clientConn) writeHandshake() error {
 	common.Must1(headerHash.Write(headerBuffer.Bytes()))
 	headerHash.Sum(headerBuffer.Extend(4)[:0])
 
-	headerKey := KDF(c.key, KDFSaltConstVMessHeaderPayloadAEADKey, authId, connectionNonce)[:16]
-	headerNonce := KDF(c.key, KDFSaltConstVMessHeaderPayloadAEADIV, authId, connectionNonce)[:12]
+	headerKey := KDF(c.key[:], KDFSaltConstVMessHeaderPayloadAEADKey, authId, connectionNonce)[:16]
+	headerNonce := KDF(c.key[:], KDFSaltConstVMessHeaderPayloadAEADIV, authId, connectionNonce)[:12]
 	headerBlock, err := aes.NewCipher(headerKey)
 	common.Must(err)
 	headerCipher, err := cipher.NewGCM(headerBlock)
 	common.Must(err)
 	headerCipher.Seal(headerBuffer.Index(0), headerNonce, headerBuffer.Bytes(), authId[:])
 
-	_, err = c.upstream.Write(requestBuffer.Bytes())
+	_, err = c.Conn.Write(requestBuffer.Bytes())
 	if err != nil {
 		return err
 	}
-	c.writer = CreateWriter(c.upstream, requestKey, requestNonce, c.command, c.security, c.option)
+	c.writer = bufio.NewExtendedWriter(CreateWriter(c.Conn, requestKey, requestNonce, c.security, c.option))
 	return nil
 }
 
-func (c *clientConn) readResponse() error {
+func (c *rawClientConn) readResponse() error {
 	_responseKey := sha256.Sum256(c.requestKey[:])
 	responseKey := _responseKey[:16]
 	_responseNonce := sha256.Sum256(c.requestNonce[:])
 	responseNonce := _responseNonce[:16]
 
 	headerLenKey := KDF(responseKey, KDFSaltConstAEADRespHeaderLenKey)[:16]
-	headerLenNonce := vmessaead.KDF(responseNonce, KDFSaltConstAEADRespHeaderLenIV)[:12]
+	headerLenNonce := KDF(responseNonce, KDFSaltConstAEADRespHeaderLenIV)[:12]
 	headerLenCipher := newAes128Gcm(headerLenKey)
 
 	_headerLenBuffer := buf.StackNewSize(2 + CipherOverhead)
@@ -190,7 +222,7 @@ func (c *clientConn) readResponse() error {
 	headerLenBuffer := common.Dup(_headerLenBuffer)
 	defer headerLenBuffer.Release()
 
-	_, err := headerLenBuffer.ReadFullFrom(c.upstream, headerLenBuffer.FreeLen())
+	_, err := headerLenBuffer.ReadFullFrom(c.Conn, headerLenBuffer.FreeLen())
 	if err != nil {
 		return err
 	}
@@ -215,7 +247,7 @@ func (c *clientConn) readResponse() error {
 	headerBuffer := common.Dup(_headerBuffer)
 	defer headerBuffer.Release()
 
-	_, err = headerBuffer.ReadFullFrom(c.upstream, headerBuffer.FreeLen())
+	_, err = headerBuffer.ReadFullFrom(c.Conn, headerBuffer.FreeLen())
 	if err != nil {
 		return err
 	}
@@ -226,10 +258,141 @@ func (c *clientConn) readResponse() error {
 	}
 	headerBuffer.Truncate(int(headerLen))
 
-	c.reader = CreateReader(c.upstream, responseKey, responseNonce, c.command, c.security, c.option)
+	reader := CreateReader(c.Conn, responseKey, responseNonce, c.security, c.option)
 	if c.readBuffer != nil {
-		c.reader = bufio.NewBufferedReader(c.reader, c.readBuffer)
+		reader = bufio.NewBufferedReader(c.reader, c.readBuffer)
 	}
+	c.reader = bufio.NewExtendedReader(reader)
 
 	return nil
+}
+
+func (c *rawClientConn) Close() error {
+	c.readBuffer.Release()
+	return c.Conn.Close()
+}
+
+func (c *rawClientConn) Upstream() any {
+	return c.Conn
+}
+
+type clientConn struct {
+	rawClientConn
+}
+
+func (c *clientConn) Read(p []byte) (n int, err error) {
+	if c.reader == nil {
+		err = c.readResponse()
+		if err != nil {
+			return
+		}
+	}
+	return c.reader.Read(p)
+}
+
+func (c *clientConn) Write(p []byte) (n int, err error) {
+	if c.writer == nil {
+		err = c.writeHandshake()
+		if err != nil {
+			return
+		}
+	}
+	return c.writer.Write(p)
+}
+
+func (c *clientConn) ReadBuffer(buffer *buf.Buffer) error {
+	if c.reader == nil {
+		err := c.readResponse()
+		if err != nil {
+			return err
+		}
+	}
+	return c.reader.ReadBuffer(buffer)
+}
+
+func (c *clientConn) WriteBuffer(buffer *buf.Buffer) error {
+	if c.writer == nil {
+		err := c.writeHandshake()
+		if err != nil {
+			buffer.Release()
+			return err
+		}
+	}
+	return c.writer.WriteBuffer(buffer)
+}
+
+func (c *clientConn) ReadFrom(r io.Reader) (n int64, err error) {
+	if c.reader == nil {
+		err = c.readResponse()
+		if err != nil {
+			return
+		}
+	}
+	return bufio.Copy(c.writer, r)
+}
+
+func (c *clientConn) WriteTo(w io.Writer) (n int64, err error) {
+	if c.reader == nil {
+		err = c.readResponse()
+		if err != nil {
+			return
+		}
+	}
+	return bufio.Copy(w, c.reader)
+}
+
+type clientPacketConn struct {
+	rawClientConn
+	destination M.Socksaddr
+}
+
+func (c *clientPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
+	if c.reader == nil {
+		err = c.readResponse()
+		if err != nil {
+			return
+		}
+	}
+	n, err = c.reader.Read(p)
+	if err != nil {
+		return
+	}
+	addr = c.destination.UDPAddr()
+	return
+}
+
+func (c *clientPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
+	if c.writer == nil {
+		err = c.writeHandshake()
+		if err != nil {
+			return
+		}
+	}
+	return c.writer.Write(p)
+}
+
+func (c *clientPacketConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksaddr, err error) {
+	if c.reader == nil {
+		err = c.readResponse()
+		if err != nil {
+			return
+		}
+	}
+	err = c.reader.ReadBuffer(buffer)
+	if err != nil {
+		return
+	}
+	destination = c.destination
+	return
+}
+
+func (c *clientPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) error {
+	if c.writer == nil {
+		err := c.writeHandshake()
+		if err != nil {
+			buffer.Release()
+			return err
+		}
+	}
+	return c.writer.WriteBuffer(buffer)
 }

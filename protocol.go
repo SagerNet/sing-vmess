@@ -82,18 +82,18 @@ func Key(uuid uuid.UUID) (key [16]byte) {
 	return
 }
 
-func AuthID(key []byte, time time.Time, buffer *buf.Buffer) {
+func AuthID(key [16]byte, time time.Time, buffer *buf.Buffer) {
 	common.Must(binary.Write(buffer, binary.BigEndian, time.Unix()))
 	buffer.WriteRandom(4)
 	checksum := crc32.ChecksumIEEE(buffer.Bytes())
 	common.Must(binary.Write(buffer, binary.BigEndian, checksum))
-	aesBlock, err := aes.NewCipher(common.Dup(key))
+	aesBlock, err := aes.NewCipher(common.Dup(key[:]))
 	common.Must(err)
 	common.KeepAlive(key)
 	aesBlock.Encrypt(buffer.Bytes(), buffer.Bytes())
 }
 
-func AutoSecurityType() int {
+func AutoSecurityType() byte {
 	if runtime.GOARCH == "amd64" || runtime.GOARCH == "s390x" || runtime.GOARCH == "arm64" {
 		return SecurityTypeAes128Gcm
 	}
@@ -109,10 +109,10 @@ func GenerateChacha20Poly1305Key(b []byte) []byte {
 	return key
 }
 
-func CreateReader(upstream io.Reader, key []byte, nonce []byte, command byte, security byte, option byte) io.Reader {
+func CreateReader(upstream io.Reader, key []byte, nonce []byte, security byte, option byte) io.Reader {
 	switch security {
 	case SecurityTypeNone:
-		if option&RequestOptionChunkStream != 0 || command == CommandUDP {
+		if option&RequestOptionChunkStream != 0 {
 			return NewStreamChunkReader(upstream, nil, nil)
 		} else {
 			return upstream
@@ -158,10 +158,10 @@ func CreateReader(upstream io.Reader, key []byte, nonce []byte, command byte, se
 	}
 }
 
-func CreateWriter(upstream io.Writer, key []byte, nonce []byte, command byte, security byte, option byte) io.Writer {
+func CreateWriter(upstream io.Writer, key []byte, nonce []byte, security byte, option byte) io.Writer {
 	switch security {
 	case SecurityTypeNone:
-		if option&RequestOptionChunkStream != 0 || command == CommandUDP {
+		if option&RequestOptionChunkStream != 0 {
 			return NewStreamChunkWriter(upstream, nil, nil)
 		} else {
 			return upstream
