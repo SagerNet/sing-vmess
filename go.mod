@@ -4,7 +4,7 @@ go 1.18
 
 require (
 	github.com/google/uuid v1.3.0
-	github.com/sagernet/sing v0.0.0-20220612033007-82cc7d29b849
+	github.com/sagernet/sing v0.0.0-20220613055024-88e581292c48
 	github.com/stretchr/testify v1.7.1
 	github.com/v2fly/v2ray-core/v5 v5.0.6
 	golang.org/x/crypto v0.0.0-20220525230936-793ad666bf5e

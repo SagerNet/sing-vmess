@@ -6,7 +6,10 @@ import (
 	"io"
 
 	"github.com/sagernet/sing/common"
+	"github.com/sagernet/sing/common/buf"
+	"github.com/sagernet/sing/common/bufio"
 	E "github.com/sagernet/sing/common/exceptions"
+	N "github.com/sagernet/sing/common/network"
 	"golang.org/x/crypto/sha3"
 )
 
@@ -71,14 +74,14 @@ func (r *StreamChunkReader) Upstream() any {
 }
 
 type StreamChunkWriter struct {
-	upstream      io.Writer
+	upstream      N.ExtendedWriter
 	chunkMasking  sha3.ShakeHash
 	globalPadding sha3.ShakeHash
 }
 
 func NewStreamChunkWriter(upstream io.Writer, chunkMasking sha3.ShakeHash, globalPadding sha3.ShakeHash) *StreamChunkWriter {
 	return &StreamChunkWriter{
-		upstream:      upstream,
+		upstream:      bufio.NewExtendedWriter(upstream),
 		chunkMasking:  chunkMasking,
 		globalPadding: globalPadding,
 	}
@@ -99,6 +102,65 @@ func (w *StreamChunkWriter) Write(p []byte) (n int, err error) {
 		dataLen ^= hashCode
 	}
 	err = binary.Write(w.upstream, binary.BigEndian, dataLen)
+	if err != nil {
+		return
+	}
+	n, err = w.upstream.Write(p)
+	if err != nil {
+		return
+	}
+	if paddingLen > 0 {
+		_, err = io.CopyN(w.upstream, rand.Reader, int64(paddingLen))
+		if err != nil {
+			return
+		}
+	}
+	return
+}
+
+func (w *StreamChunkWriter) WriteBuffer(buffer *buf.Buffer) error {
+	dataLen := uint16(buffer.Len())
+	var paddingLen uint16
+	if w.globalPadding != nil {
+		var hashCode uint16
+		common.Must(binary.Read(w.globalPadding, binary.BigEndian, &hashCode))
+		paddingLen = hashCode % 64
+		dataLen += paddingLen
+	}
+	if w.chunkMasking != nil {
+		var hashCode uint16
+		common.Must(binary.Read(w.chunkMasking, binary.BigEndian, &hashCode))
+		dataLen ^= hashCode
+	}
+	binary.BigEndian.PutUint16(buffer.ExtendHeader(2), dataLen)
+	if paddingLen > 0 {
+		_, err := io.CopyN(buffer, rand.Reader, int64(paddingLen))
+		if err != nil {
+			return err
+		}
+	}
+	return w.upstream.WriteBuffer(buffer)
+}
+
+func (w *StreamChunkWriter) WriteWithChecksum(checksum uint32, p []byte) (n int, err error) {
+	dataLen := uint16(4 + len(p))
+	var paddingLen uint16
+	if w.globalPadding != nil {
+		var hashCode uint16
+		common.Must(binary.Read(w.globalPadding, binary.BigEndian, &hashCode))
+		paddingLen = hashCode % 64
+		dataLen += paddingLen
+	}
+	if w.chunkMasking != nil {
+		var hashCode uint16
+		common.Must(binary.Read(w.chunkMasking, binary.BigEndian, &hashCode))
+		dataLen ^= hashCode
+	}
+	err = binary.Write(w.upstream, binary.BigEndian, dataLen)
+	if err != nil {
+		return
+	}
+	err = binary.Write(w.upstream, binary.BigEndian, checksum)
 	if err != nil {
 		return
 	}

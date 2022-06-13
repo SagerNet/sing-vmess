@@ -6,9 +6,9 @@ Some confusing protocol.
 
 - [x] Stream length chunk with padding and masking
 - [x] AEAD length chunk with padding
-- [ ] Stream chunk
+- [x] Stream chunk
 - [x] AEAD Chunk
-- [ ] Stream client
+- [ ] Legacy client
 - [x] AEAD Client
-- [ ] Stream server
+- [ ] Legacy server
 - [ ] AEAD Server

@@ -33,6 +33,8 @@ func NewClient(uuid uuid.UUID, security string, options ...ClientOption) (*Clien
 		rawSecurity = AutoSecurityType()
 	case "none", "zero":
 		rawSecurity = SecurityTypeNone
+	case "aes-128-cfb":
+		rawSecurity = SecurityTypeLegacy
 	case "aes-128-gcm":
 		rawSecurity = SecurityTypeAes128Gcm
 	case "chacha20-poly1305":
@@ -100,6 +102,10 @@ func (c *Client) dialRaw(upstream net.Conn, command byte, destination M.Socksadd
 
 	switch security {
 	case SecurityTypeNone:
+		if command == CommandUDP {
+			option = RequestOptionChunkStream
+		}
+	case SecurityTypeLegacy:
 		if command == CommandUDP {
 			option = RequestOptionChunkStream
 		}

@@ -65,7 +65,10 @@ const (
 	CipherOverhead = 16
 )
 
-var ErrUnsupportedSecurityType = E.New("unsupported security type")
+var (
+	ErrUnsupportedSecurityType = E.New("vmess: unsupported security type")
+	ErrInvalidChecksum         = E.New("vmess: invalid chunk checksum")
+)
 
 var AddressSerializer = M.NewSerializer(
 	M.AddressFamilyByte(0x01, M.AddressFamilyIPv4),
@@ -116,6 +119,26 @@ func CreateReader(upstream io.Reader, key []byte, nonce []byte, security byte, o
 		} else {
 			return upstream
 		}
+	case SecurityTypeLegacy:
+		reader := upstream
+		if option&RequestOptionChunkStream != 0 {
+			var globalPadding sha3.ShakeHash
+			if option&RequestOptionGlobalPadding != 0 {
+				globalPadding = sha3.NewShake128()
+				common.Must1(globalPadding.Write(nonce))
+			}
+			var chunkMasking sha3.ShakeHash
+			if option&RequestOptionChunkMasking != 0 {
+				if globalPadding != nil {
+					chunkMasking = globalPadding
+				} else {
+					chunkMasking = sha3.NewShake128()
+					common.Must1(chunkMasking.Write(nonce))
+				}
+			}
+			reader = NewStreamChunkReader(upstream, chunkMasking, globalPadding)
+		}
+		return NewStreamReader(reader, key, nonce)
 	case SecurityTypeAes128Gcm:
 		var chunkReader io.Reader
 		var globalPadding sha3.ShakeHash
@@ -173,15 +196,35 @@ func CreateWriter(upstream io.Writer, key []byte, nonce []byte, security byte, o
 		} else {
 			return upstream
 		}
+	case SecurityTypeLegacy:
+		writer := upstream
+		if option&RequestOptionChunkStream != 0 {
+			var globalPadding sha3.ShakeHash
+			if option&RequestOptionGlobalPadding != 0 {
+				globalPadding = sha3.NewShake128()
+				common.Must1(globalPadding.Write(nonce))
+			}
+			var chunkMasking sha3.ShakeHash
+			if option&RequestOptionChunkMasking != 0 {
+				if globalPadding != nil {
+					chunkMasking = globalPadding
+				} else {
+					chunkMasking = sha3.NewShake128()
+					common.Must1(chunkMasking.Write(nonce))
+				}
+			}
+			writer = NewStreamChunkWriter(upstream, chunkMasking, globalPadding)
+		}
+		return NewStreamWriter(writer, key, nonce)
 	case SecurityTypeAes128Gcm:
-		var chunkWriter io.Writer
+		var writer io.Writer
 		var globalPadding sha3.ShakeHash
 		if option&RequestOptionGlobalPadding != 0 {
 			globalPadding = sha3.NewShake128()
 			common.Must1(globalPadding.Write(nonce))
 		}
 		if option&RequestOptionAuthenticatedLength != 0 {
-			chunkWriter = NewAes128GcmChunkWriter(upstream, key, nonce, globalPadding)
+			writer = NewAes128GcmChunkWriter(upstream, key, nonce, globalPadding)
 		} else {
 			var chunkMasking sha3.ShakeHash
 			if option&RequestOptionChunkMasking != 0 {
@@ -192,9 +235,9 @@ func CreateWriter(upstream io.Writer, key []byte, nonce []byte, security byte, o
 					common.Must1(chunkMasking.Write(nonce))
 				}
 			}
-			chunkWriter = NewStreamChunkWriter(upstream, chunkMasking, globalPadding)
+			writer = NewStreamChunkWriter(upstream, chunkMasking, globalPadding)
 		}
-		return NewAes128GcmWriter(chunkWriter, key, nonce)
+		return NewAes128GcmWriter(writer, key, nonce)
 	case SecurityTypeChacha20Poly1305:
 		var chunkWriter io.Writer
 		var globalPadding sha3.ShakeHash

@@ -32,6 +32,21 @@ func TestClientSessionPaddingAuthenticatedLength(t *testing.T) {
 }
 
 func testClientSession(t *testing.T, options ...vmess.ClientOption) {
+	t.Run("none", func(t *testing.T) {
+		testClientSession0(t, protocol.SecurityType_NONE, "none", options...)
+	})
+	t.Run("aes-128-gcm", func(t *testing.T) {
+		testClientSession0(t, protocol.SecurityType_AES128_GCM, "aes-128-gcm", options...)
+	})
+	t.Run("chacha20-poly1305", func(t *testing.T) {
+		testClientSession0(t, protocol.SecurityType_CHACHA20_POLY1305, "chacha20-poly1305", options...)
+	})
+	t.Run("aes-128-cfb", func(t *testing.T) {
+		testClientSession0(t, protocol.SecurityType_LEGACY, "aes-128-cfb", options...)
+	})
+}
+
+func testClientSession0(t *testing.T, security protocol.SecurityType, securityName string, options ...vmess.ClientOption) {
 	user := uuid.New()
 
 	userValidator := vVmess.NewTimedUserValidator(protocol.DefaultIDHash)
