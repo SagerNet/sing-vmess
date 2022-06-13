@@ -1,11 +1,9 @@
 package vmess
 
 import (
-	"crypto/aes"
 	"crypto/cipher"
 	"io"
 
-	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/buf"
 	"github.com/sagernet/sing/common/bufio"
 	N "github.com/sagernet/sing/common/network"
@@ -17,12 +15,10 @@ type StreamReader struct {
 }
 
 func NewStreamReader(upstream io.Reader, key []byte, iv []byte) *StreamReader {
-	var reader StreamReader
-	reader.upstream = bufio.NewExtendedReader(upstream)
-	block, err := aes.NewCipher(key)
-	common.Must(err)
-	reader.cipher = cipher.NewCFBDecrypter(block, iv)
-	return &reader
+	return &StreamReader{
+		upstream: bufio.NewExtendedReader(upstream),
+		cipher:   newAesStream(key, iv, cipher.NewCFBDecrypter),
+	}
 }
 
 func (r *StreamReader) Read(p []byte) (n int, err error) {
@@ -53,12 +49,10 @@ type StreamWriter struct {
 }
 
 func NewStreamWriter(upstream io.Writer, key []byte, iv []byte) *StreamWriter {
-	var writer StreamWriter
-	writer.upstream = bufio.NewExtendedWriter(upstream)
-	block, err := aes.NewCipher(key)
-	common.Must(err)
-	writer.cipher = cipher.NewCFBEncrypter(block, iv)
-	return &writer
+	return &StreamWriter{
+		upstream: bufio.NewExtendedWriter(upstream),
+		cipher:   newAesStream(key, iv, cipher.NewCFBEncrypter),
+	}
 }
 
 func (w *StreamWriter) Write(p []byte) (n int, err error) {

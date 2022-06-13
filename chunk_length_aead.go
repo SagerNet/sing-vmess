@@ -21,10 +21,12 @@ type AEADChunkReader struct {
 }
 
 func NewAEADChunkReader(upstream io.Reader, cipher cipher.AEAD, nonce []byte, globalPadding sha3.ShakeHash) *AEADChunkReader {
+	readNonce := make([]byte, cipher.NonceSize())
+	copy(readNonce, nonce)
 	return &AEADChunkReader{
 		upstream:      upstream,
 		cipher:        cipher,
-		nonce:         nonce[:cipher.NonceSize()],
+		nonce:         readNonce,
 		globalPadding: globalPadding,
 	}
 }
@@ -98,10 +100,12 @@ type AEADChunkWriter struct {
 }
 
 func NewAEADChunkWriter(upstream io.Writer, cipher cipher.AEAD, nonce []byte, globalPadding sha3.ShakeHash) *AEADChunkWriter {
+	writeNonce := make([]byte, cipher.NonceSize())
+	copy(writeNonce, nonce)
 	return &AEADChunkWriter{
 		upstream:      upstream,
 		cipher:        cipher,
-		nonce:         nonce[:cipher.NonceSize()],
+		nonce:         writeNonce,
 		globalPadding: globalPadding,
 	}
 }

@@ -19,10 +19,12 @@ type AEADReader struct {
 }
 
 func NewAEADReader(upstream io.Reader, cipher cipher.AEAD, nonce []byte) *AEADReader {
+	readNonce := make([]byte, cipher.NonceSize())
+	copy(readNonce, nonce)
 	return &AEADReader{
 		upstream: bufio.NewExtendedReader(upstream),
 		cipher:   cipher,
-		nonce:    nonce[:cipher.NonceSize()],
+		nonce:    readNonce,
 	}
 }
 
@@ -76,10 +78,12 @@ type AEADWriter struct {
 }
 
 func NewAEADWriter(upstream io.Writer, cipher cipher.AEAD, nonce []byte) *AEADWriter {
+	writeNonce := make([]byte, cipher.NonceSize())
+	copy(writeNonce, nonce)
 	return &AEADWriter{
 		upstream: bufio.NewExtendedWriter(upstream),
 		cipher:   cipher,
-		nonce:    nonce[:cipher.NonceSize()],
+		nonce:    writeNonce,
 	}
 }
 

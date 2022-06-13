@@ -8,7 +8,7 @@ Some confusing protocol.
 - [x] AEAD length chunk with padding
 - [x] Stream chunk
 - [x] AEAD Chunk
-- [ ] Legacy client
+- [x] Legacy client
 - [x] AEAD Client
 - [ ] Legacy server
 - [ ] AEAD Server

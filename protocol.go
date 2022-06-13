@@ -77,12 +77,27 @@ var AddressSerializer = M.NewSerializer(
 	M.PortThenAddress(),
 )
 
-func Key(uuid uuid.UUID) (key [16]byte) {
+func Key(user uuid.UUID) (key [16]byte) {
 	md5hash := md5.New()
-	common.Must1(md5hash.Write(uuid[:]))
+	common.Must1(md5hash.Write(common.Dup(user[:])))
 	common.Must1(md5hash.Write([]byte("c48619fe-8f02-49e0-b9e9-edf763e17e21")))
 	md5hash.Sum(common.Dup(key[:0]))
+	common.KeepAlive(user)
 	return
+}
+
+func AlterId(user uuid.UUID) uuid.UUID {
+	md5hash := md5.New()
+	common.Must1(md5hash.Write(common.Dup(user[:])))
+	common.Must1(md5hash.Write([]byte("16167dc8-16b6-4e6d-b8bb-65dd68113a81")))
+	var newUser uuid.UUID
+	for {
+		md5hash.Sum(common.Dup(newUser[:0]))
+		if user != newUser {
+			return newUser
+		}
+		common.Must1(md5hash.Write([]byte("533eff8a-4113-4b10-b5ce-0f5d76b98cd2")))
+	}
 }
 
 func AuthID(key [16]byte, time time.Time, buffer *buf.Buffer) {
@@ -111,7 +126,7 @@ func GenerateChacha20Poly1305Key(b []byte) []byte {
 	return key
 }
 
-func CreateReader(upstream io.Reader, key []byte, nonce []byte, security byte, option byte) io.Reader {
+func CreateReader(upstream io.Reader, streamReader io.Reader, requestKey []byte, requestNonce []byte, responseKey []byte, responseNonce []byte, security byte, option byte) io.Reader {
 	switch security {
 	case SecurityTypeNone:
 		if option&RequestOptionChunkStream != 0 {
@@ -120,12 +135,14 @@ func CreateReader(upstream io.Reader, key []byte, nonce []byte, security byte, o
 			return upstream
 		}
 	case SecurityTypeLegacy:
-		reader := upstream
+		if streamReader == nil {
+			streamReader = NewStreamReader(upstream, responseKey, responseNonce)
+		}
 		if option&RequestOptionChunkStream != 0 {
 			var globalPadding sha3.ShakeHash
 			if option&RequestOptionGlobalPadding != 0 {
 				globalPadding = sha3.NewShake128()
-				common.Must1(globalPadding.Write(nonce))
+				common.Must1(globalPadding.Write(responseNonce))
 			}
 			var chunkMasking sha3.ShakeHash
 			if option&RequestOptionChunkMasking != 0 {
@@ -133,21 +150,21 @@ func CreateReader(upstream io.Reader, key []byte, nonce []byte, security byte, o
 					chunkMasking = globalPadding
 				} else {
 					chunkMasking = sha3.NewShake128()
-					common.Must1(chunkMasking.Write(nonce))
+					common.Must1(chunkMasking.Write(responseNonce))
 				}
 			}
-			reader = NewStreamChunkReader(upstream, chunkMasking, globalPadding)
+			return NewStreamChecksumReader(NewStreamChunkReader(streamReader, chunkMasking, globalPadding))
 		}
-		return NewStreamReader(reader, key, nonce)
+		return streamReader
 	case SecurityTypeAes128Gcm:
 		var chunkReader io.Reader
 		var globalPadding sha3.ShakeHash
 		if option&RequestOptionGlobalPadding != 0 {
 			globalPadding = sha3.NewShake128()
-			common.Must1(globalPadding.Write(nonce))
+			common.Must1(globalPadding.Write(responseNonce))
 		}
 		if option&RequestOptionAuthenticatedLength != 0 {
-			chunkReader = NewAes128GcmChunkReader(upstream, key, nonce, globalPadding)
+			chunkReader = NewAes128GcmChunkReader(upstream, requestKey, requestNonce, globalPadding)
 		} else {
 			var chunkMasking sha3.ShakeHash
 			if option&RequestOptionChunkMasking != 0 {
@@ -155,21 +172,21 @@ func CreateReader(upstream io.Reader, key []byte, nonce []byte, security byte, o
 					chunkMasking = globalPadding
 				} else {
 					chunkMasking = sha3.NewShake128()
-					common.Must1(chunkMasking.Write(nonce))
+					common.Must1(chunkMasking.Write(responseNonce))
 				}
 			}
 			chunkReader = NewStreamChunkReader(upstream, chunkMasking, globalPadding)
 		}
-		return NewAes128GcmReader(chunkReader, key, nonce)
+		return NewAes128GcmReader(chunkReader, responseKey, responseNonce)
 	case SecurityTypeChacha20Poly1305:
 		var chunkReader io.Reader
 		var globalPadding sha3.ShakeHash
 		if option&RequestOptionGlobalPadding != 0 {
 			globalPadding = sha3.NewShake128()
-			common.Must1(globalPadding.Write(nonce))
+			common.Must1(globalPadding.Write(responseNonce))
 		}
 		if option&RequestOptionAuthenticatedLength != 0 {
-			chunkReader = NewChacha20Poly1305ChunkReader(upstream, key, nonce, globalPadding)
+			chunkReader = NewChacha20Poly1305ChunkReader(upstream, requestKey, requestNonce, globalPadding)
 		} else {
 			var chunkMasking sha3.ShakeHash
 			if option&RequestOptionChunkMasking != 0 {
@@ -177,12 +194,12 @@ func CreateReader(upstream io.Reader, key []byte, nonce []byte, security byte, o
 					chunkMasking = globalPadding
 				} else {
 					chunkMasking = sha3.NewShake128()
-					common.Must1(chunkMasking.Write(nonce))
+					common.Must1(chunkMasking.Write(responseNonce))
 				}
 			}
 			chunkReader = NewStreamChunkReader(upstream, chunkMasking, globalPadding)
 		}
-		return NewChacha20Poly1305Reader(chunkReader, key, nonce)
+		return NewChacha20Poly1305Reader(chunkReader, responseKey, responseNonce)
 	default:
 		panic("unexpected security type")
 	}
@@ -197,7 +214,6 @@ func CreateWriter(upstream io.Writer, key []byte, nonce []byte, security byte, o
 			return upstream
 		}
 	case SecurityTypeLegacy:
-		writer := upstream
 		if option&RequestOptionChunkStream != 0 {
 			var globalPadding sha3.ShakeHash
 			if option&RequestOptionGlobalPadding != 0 {
@@ -213,9 +229,9 @@ func CreateWriter(upstream io.Writer, key []byte, nonce []byte, security byte, o
 					common.Must1(chunkMasking.Write(nonce))
 				}
 			}
-			writer = NewStreamChunkWriter(upstream, chunkMasking, globalPadding)
+			return NewStreamChecksumWriter(NewStreamChunkWriter(NewStreamWriter(upstream, key, nonce), chunkMasking, globalPadding))
 		}
-		return NewStreamWriter(writer, key, nonce)
+		return NewStreamWriter(upstream, key, nonce)
 	case SecurityTypeAes128Gcm:
 		var writer io.Writer
 		var globalPadding sha3.ShakeHash
@@ -271,6 +287,12 @@ func newAesGcm(key []byte) cipher.AEAD {
 	outCipher, err := cipher.NewGCM(block)
 	common.Must(err)
 	return outCipher
+}
+
+func newAesStream(key []byte, iv []byte, stream func(block cipher.Block, iv []byte) cipher.Stream) cipher.Stream {
+	block, err := aes.NewCipher(key)
+	common.Must(err)
+	return stream(block, iv)
 }
 
 func newChacha20Poly1305(key []byte) cipher.AEAD {

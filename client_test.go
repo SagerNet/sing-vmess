@@ -2,6 +2,7 @@ package vmess_test
 
 import (
 	"net"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -9,6 +10,7 @@ import (
 	"github.com/sagernet/sing/common"
 	M "github.com/sagernet/sing/common/metadata"
 	"github.com/stretchr/testify/require"
+	vBuf "github.com/v2fly/v2ray-core/v5/common/buf"
 	"github.com/v2fly/v2ray-core/v5/common/protocol"
 	vUUID "github.com/v2fly/v2ray-core/v5/common/uuid"
 	vVmess "github.com/v2fly/v2ray-core/v5/proxy/vmess"
@@ -47,15 +49,29 @@ func testClientSession(t *testing.T, options ...vmess.ClientOption) {
 }
 
 func testClientSession0(t *testing.T, security protocol.SecurityType, securityName string, options ...vmess.ClientOption) {
+	t.Run("aead-header", func(t *testing.T) {
+		testClientSession1(t, security, securityName, 0, options...)
+	})
+	t.Run("legacy-header", func(t *testing.T) {
+		testClientSession1(t, security, securityName, 1, options...)
+	})
+}
+
+func testClientSession1(t *testing.T, security protocol.SecurityType, securityName string, alterId int, options ...vmess.ClientOption) {
 	user := uuid.New()
 
 	userValidator := vVmess.NewTimedUserValidator(protocol.DefaultIDHash)
 	defer common.Close(userValidator)
+
+	account := &vVmess.MemoryAccount{
+		ID:       protocol.NewID(vUUID.UUID(user)),
+		Security: security,
+	}
+	if alterId > 0 {
+		account.AlterIDs = protocol.NewAlterIDs(account.ID, uint16(alterId))
+	}
 	userValidator.Add(&protocol.MemoryUser{
-		Account: &vVmess.MemoryAccount{
-			ID:       protocol.NewID(vUUID.UUID(user)),
-			Security: protocol.SecurityType_AES128_GCM,
-		},
+		Account: account,
 	})
 
 	sessionHistory := encoding.NewSessionHistory()
@@ -68,13 +84,22 @@ func testClientSession0(t *testing.T, security protocol.SecurityType, securityNa
 
 	testDestination := "test.com:443"
 
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	client, err := vmess.NewClient(user, securityName, alterId, options...)
+	require.NoError(t, err)
+
 	go func() {
-		client, err := vmess.NewClient(user, "aes-128-gcm", options...)
-		require.NoError(t, err)
+		defer wg.Done()
 		conn, err := client.DialConn(clientConn, M.ParseSocksaddr(testDestination))
 		require.NoError(t, err)
 		_, err = conn.Write([]byte("ping"))
 		require.NoError(t, err)
+		var pong [4]byte
+		_, err = conn.Read(pong[:])
+		require.NoError(t, err)
+		require.Equal(t, "pong", string(pong[:]))
 	}()
 
 	requestHeader, err := serverSession.DecodeRequestHeader(serverConn)
@@ -83,5 +108,10 @@ func testClientSession0(t *testing.T, security protocol.SecurityType, securityNa
 	serverReader := serverSession.DecodeRequestBody(requestHeader, serverConn)
 	mb, err := serverReader.ReadMultiBuffer()
 	require.NoError(t, err)
-	require.Equal(t, mb.String(), "ping")
+	require.Equal(t, "ping", mb.String())
+	serverSession.EncodeResponseHeader(&protocol.ResponseHeader{Option: requestHeader.Option}, serverConn)
+	serverWriter := serverSession.EncodeResponseBody(requestHeader, serverConn)
+	err = serverWriter.WriteMultiBuffer(vBuf.MultiBuffer{vBuf.FromBytes([]byte("pong"))})
+	require.NoError(t, err)
+	wg.Wait()
 }
