@@ -1,7 +1,7 @@
-github.com/google/uuid v1.3.0 h1:t6JiXgmwXMjEs8VusXIJk2BXHsn+wx8BZdTaoZ5fu7I=
-github.com/google/uuid v1.3.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
-github.com/sagernet/sing v0.0.0-20220613055024-88e581292c48 h1:c68toYxg6Cu8DJeGrLBVnU93ZZ0+6pkN36pUHNCNsk0=
-github.com/sagernet/sing v0.0.0-20220613055024-88e581292c48/go.mod h1:ZEo7wZBfJmzm8uwnbCtWEHw9GsIfSThSylZYcR+H/Zw=
+github.com/gofrs/uuid v4.2.0+incompatible h1:yyYWMnhkhrKwwr8gAOcOCYxOOscHgDS9yZgBrnJfGa0=
+github.com/gofrs/uuid v4.2.0+incompatible/go.mod h1:b2aQJv3Z4Fp6yNu3cdSllBxTCLRxnplIgP/c0N/04lM=
+github.com/sagernet/sing v0.0.0-20220613141651-81b9dd48530f h1:EDGZ1dwoolKQr1+441tpsgHIadmTJvHAls+WFjU6e2s=
+github.com/sagernet/sing v0.0.0-20220613141651-81b9dd48530f/go.mod h1:ZEo7wZBfJmzm8uwnbCtWEHw9GsIfSThSylZYcR+H/Zw=
 golang.org/x/crypto v0.0.0-20220525230936-793ad666bf5e h1:T8NU3HyQ8ClP4SEE+KbFlg6n0NhuTsN4MyznaarGsZM=
 golang.org/x/crypto v0.0.0-20220525230936-793ad666bf5e/go.mod h1:IxCIyHEi3zRg3s0A5j5BB6A9Jmi73HwBIUl50j+osU4=
 golang.org/x/sys v0.0.0-20220608164250-635b8c9b7f68 h1:z8Hj/bl9cOV2grsOpEaQFUaly0JWN3i97mo3jXKJNp0=

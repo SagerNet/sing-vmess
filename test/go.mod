@@ -3,8 +3,8 @@ module vmess_test
 go 1.18
 
 require (
-	github.com/google/uuid v1.3.0
-	github.com/sagernet/sing v0.0.0-20220613055024-88e581292c48
+	github.com/gofrs/uuid v4.2.0+incompatible
+	github.com/sagernet/sing v0.0.0-20220613141651-81b9dd48530f
 	github.com/sagernet/sing-vmess v0.0.0
 	github.com/stretchr/testify v1.7.2
 	github.com/v2fly/v2ray-core/v5 v5.0.7

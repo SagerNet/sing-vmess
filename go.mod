@@ -3,8 +3,8 @@ module github.com/sagernet/sing-vmess
 go 1.18
 
 require (
-	github.com/google/uuid v1.3.0
-	github.com/sagernet/sing v0.0.0-20220613055024-88e581292c48
+	github.com/gofrs/uuid v4.2.0+incompatible
+	github.com/sagernet/sing v0.0.0-20220613141651-81b9dd48530f
 	golang.org/x/crypto v0.0.0-20220525230936-793ad666bf5e
 )
 

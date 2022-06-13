@@ -13,7 +13,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/gofrs/uuid"
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/buf"
 	"github.com/sagernet/sing/common/bufio"
@@ -77,8 +77,18 @@ func (c *Client) DialEarlyConn(upstream net.Conn, destination M.Socksaddr) N.Ext
 	return &clientConn{c.dialRaw(upstream, CommandTCP, destination)}
 }
 
-func (c *Client) DialPacketConn(upstream net.Conn, destination M.Socksaddr) N.NetPacketConn {
-	return &clientPacketConn{c.dialRaw(upstream, CommandTCP, destination), destination}
+type PacketConn interface {
+	net.Conn
+	N.NetPacketConn
+}
+
+func (c *Client) DialPacketConn(upstream net.Conn, destination M.Socksaddr) (PacketConn, error) {
+	conn := &clientPacketConn{clientConn{c.dialRaw(upstream, CommandUDP, destination)}, destination}
+	return conn, conn.writeHandshake()
+}
+
+func (c *Client) DialEarlyPacketConn(upstream net.Conn, destination M.Socksaddr) PacketConn {
+	return &clientPacketConn{clientConn{c.dialRaw(upstream, CommandUDP, destination)}, destination}
 }
 
 type rawClientConn struct {
@@ -128,7 +138,7 @@ func (c *Client) dialRaw(upstream net.Conn, command byte, destination M.Socksadd
 		}
 	}
 
-	if option&RequestOptionChunkStream != 0 {
+	if option&RequestOptionChunkStream != 0 && command == CommandTCP {
 		conn.readBuffer = buf.New()
 	}
 
@@ -221,6 +231,9 @@ func (c *rawClientConn) writeHandshake() error {
 			return err
 		}
 		c.writer = bufio.NewExtendedWriter(CreateWriter(c.Conn, c.requestKey[:], c.requestNonce[:], c.security, c.option))
+	}
+	if c.option&RequestOptionChunkStream != 0 && c.command == CommandTCP {
+		c.writer = bufio.NewLimitedWriter(c.writer, 65535-CipherOverhead*2)
 	}
 	return nil
 }
@@ -412,7 +425,7 @@ func (c *clientConn) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 type clientPacketConn struct {
-	rawClientConn
+	clientConn
 	destination M.Socksaddr
 }
 

@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/google/uuid"
+	"github.com/gofrs/uuid"
 	"github.com/sagernet/sing-vmess"
 	"github.com/sagernet/sing/common"
 	M "github.com/sagernet/sing/common/metadata"
@@ -58,7 +58,8 @@ func testClientSession0(t *testing.T, security protocol.SecurityType, securityNa
 }
 
 func testClientSession1(t *testing.T, security protocol.SecurityType, securityName string, alterId int, options ...vmess.ClientOption) {
-	user := uuid.New()
+	user, err := uuid.DefaultGenerator.NewV4()
+	require.NoError(t, err)
 
 	userValidator := vVmess.NewTimedUserValidator(protocol.DefaultIDHash)
 	defer common.Close(userValidator)

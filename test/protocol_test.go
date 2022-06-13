@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/gofrs/uuid"
 	"github.com/sagernet/sing-vmess"
 	"github.com/sagernet/sing/common/buf"
 	"github.com/stretchr/testify/require"
@@ -14,7 +14,8 @@ import (
 )
 
 func TestAuthId(t *testing.T) {
-	user := uuid.New()
+	user, err := uuid.DefaultGenerator.NewV4()
+	require.NoError(t, err)
 	buffer := buf.NewSize(16)
 	defer buffer.Release()
 	cmdKey := vmess.Key(user)
@@ -23,7 +24,7 @@ func TestAuthId(t *testing.T) {
 	copy(authId[:], buffer.Bytes())
 	decoder := vmessaead.NewAuthIDDecoderHolder()
 	decoder.AddUser(cmdKey, "Demo User")
-	_, err := decoder.Match(authId)
+	_, err = decoder.Match(authId)
 	require.NoError(t, err)
 }
 
