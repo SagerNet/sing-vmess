@@ -32,7 +32,12 @@ type Client struct {
 	alterKey [16]byte
 }
 
-func NewClient(user uuid.UUID, security string, alterId int, options ...ClientOption) (*Client, error) {
+func NewClient(userId string, security string, alterId int, options ...ClientOption) (*Client, error) {
+	user := uuid.FromStringOrNil(userId)
+	if user == uuid.Nil {
+		user = uuid.NewV5(user, userId)
+	}
+
 	var rawSecurity byte
 	switch security {
 	case "auto":
