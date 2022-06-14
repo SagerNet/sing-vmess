@@ -88,7 +88,7 @@ func testClientSession1(t *testing.T, security protocol.SecurityType, securityNa
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	client, err := vmess.NewClient(user, securityName, alterId, options...)
+	client, err := vmess.NewClient(user.String(), securityName, alterId, options...)
 	require.NoError(t, err)
 
 	go func() {
