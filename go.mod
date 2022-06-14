@@ -4,7 +4,7 @@ go 1.18
 
 require (
 	github.com/gofrs/uuid v4.2.0+incompatible
-	github.com/sagernet/sing v0.0.0-20220613141651-81b9dd48530f
+	github.com/sagernet/sing v0.0.0-20220614034114-7caa1d0c0851
 	golang.org/x/crypto v0.0.0-20220525230936-793ad666bf5e
 )
 
