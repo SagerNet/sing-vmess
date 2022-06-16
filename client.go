@@ -356,7 +356,6 @@ func (c *rawClientConn) readResponse() error {
 }
 
 func (c *rawClientConn) Close() error {
-	c.readBuffer.Release()
 	return c.Conn.Close()
 }
 

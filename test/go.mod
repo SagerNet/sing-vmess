@@ -4,7 +4,7 @@ go 1.18
 
 require (
 	github.com/gofrs/uuid v4.2.0+incompatible
-	github.com/sagernet/sing v0.0.0-20220614091938-64835a637bdc
+	github.com/sagernet/sing v0.0.0-20220616021941-9d8843179151
 	github.com/sagernet/sing-vmess v0.0.0
 	github.com/stretchr/testify v1.7.2
 	github.com/v2fly/v2ray-core/v5 v5.0.7
