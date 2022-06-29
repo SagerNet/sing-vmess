@@ -229,7 +229,7 @@ func (c *rawClientConn) writeHandshake() error {
 		c.encodeHeader(headerBuffer, paddingLen)
 		headerKey := KDF(c.key[:], KDFSaltConstVMessHeaderPayloadAEADKey, authId, connectionNonce)[:16]
 		headerNonce := KDF(c.key[:], KDFSaltConstVMessHeaderPayloadAEADIV, authId, connectionNonce)[:12]
-		newAesGcm(headerKey).Seal(headerBuffer.Index(0), headerNonce, headerBuffer.Bytes(), authId[:])
+		newAesGcm(headerKey).Seal(headerBuffer.Index(0), headerNonce, headerBuffer.Bytes(), authId)
 
 		_, err := c.Conn.Write(requestBuffer.Bytes())
 		if err != nil {

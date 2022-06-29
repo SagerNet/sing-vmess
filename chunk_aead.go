@@ -29,11 +29,11 @@ func NewAEADReader(upstream io.Reader, cipher cipher.AEAD, nonce []byte) *AEADRe
 }
 
 func NewAes128GcmReader(upstream io.Reader, key []byte, nonce []byte) *AEADReader {
-	return NewAEADReader(upstream, newAesGcm(key[:]), nonce)
+	return NewAEADReader(upstream, newAesGcm(key), nonce)
 }
 
 func NewChacha20Poly1305Reader(upstream io.Reader, key []byte, nonce []byte) *AEADReader {
-	return NewAEADReader(upstream, newChacha20Poly1305(GenerateChacha20Poly1305Key(key[:])), nonce)
+	return NewAEADReader(upstream, newChacha20Poly1305(GenerateChacha20Poly1305Key(key)), nonce)
 }
 
 func (r *AEADReader) Read(p []byte) (n int, err error) {
