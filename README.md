@@ -11,4 +11,4 @@ Some confusing protocol.
 - [x] Legacy client
 - [x] AEAD Client
 - [ ] Legacy server
-- [ ] AEAD Server
+- [x] AEAD Server

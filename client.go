@@ -13,13 +13,14 @@ import (
 	"net"
 	"time"
 
-	"github.com/gofrs/uuid"
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/buf"
 	"github.com/sagernet/sing/common/bufio"
 	E "github.com/sagernet/sing/common/exceptions"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
+
+	"github.com/gofrs/uuid"
 )
 
 type Client struct {
@@ -199,7 +200,7 @@ func (c *rawClientConn) writeHandshake() error {
 		if err != nil {
 			return err
 		}
-		c.writer = bufio.NewExtendedWriter(CreateWriter(c.Conn, c.requestKey[:], c.requestNonce[:], c.security, c.option))
+		c.writer = bufio.NewExtendedWriter(CreateWriter(c.Conn, c.requestKey[:], c.requestNonce[:], c.requestKey[:], c.requestNonce[:], c.security, c.option))
 	} else {
 		const headerLenBufferLen = 2 + CipherOverhead
 
@@ -235,7 +236,7 @@ func (c *rawClientConn) writeHandshake() error {
 		if err != nil {
 			return err
 		}
-		c.writer = bufio.NewExtendedWriter(CreateWriter(c.Conn, c.requestKey[:], c.requestNonce[:], c.security, c.option))
+		c.writer = bufio.NewExtendedWriter(CreateWriter(c.Conn, c.requestKey[:], c.requestNonce[:], c.requestKey[:], c.requestNonce[:], c.security, c.option))
 	}
 	if c.option&RequestOptionChunkStream != 0 && c.command == CommandTCP {
 		c.writer = bufio.NewLimitedWriter(c.writer, 65535-CipherOverhead*2)
@@ -356,7 +357,10 @@ func (c *rawClientConn) readResponse() error {
 }
 
 func (c *rawClientConn) Close() error {
-	return c.Conn.Close()
+	return common.Close(
+		c.Conn,
+		c.reader,
+	)
 }
 
 func (c *rawClientConn) Upstream() any {
@@ -409,8 +413,8 @@ func (c *clientConn) WriteBuffer(buffer *buf.Buffer) error {
 }
 
 func (c *clientConn) ReadFrom(r io.Reader) (n int64, err error) {
-	if c.reader == nil {
-		err = c.readResponse()
+	if c.writer == nil {
+		err = c.writeHandshake()
 		if err != nil {
 			return
 		}

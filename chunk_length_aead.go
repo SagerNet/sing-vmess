@@ -9,6 +9,7 @@ import (
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/buf"
 	E "github.com/sagernet/sing/common/exceptions"
+
 	"golang.org/x/crypto/sha3"
 )
 

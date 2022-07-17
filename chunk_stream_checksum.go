@@ -68,7 +68,7 @@ func (w *StreamChecksumWriter) Write(p []byte) (n int, err error) {
 func (w *StreamChecksumWriter) WriteBuffer(buffer *buf.Buffer) error {
 	hash := fnv.New32a()
 	common.Must1(hash.Write(buffer.Bytes()))
-	hash.Sum(buffer.Extend(4)[:0])
+	hash.Sum(buffer.ExtendHeader(4)[:0])
 	return common.Error(w.upstream.Write(buffer.Bytes()))
 }
 

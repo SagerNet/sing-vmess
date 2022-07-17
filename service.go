@@ -1,0 +1,364 @@
+package vmess
+
+import (
+	"bytes"
+	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/sha256"
+	"encoding/binary"
+	"hash/crc32"
+	"io"
+	"math"
+	"net"
+	"time"
+
+	"github.com/sagernet/sing/common"
+	"github.com/sagernet/sing/common/auth"
+	"github.com/sagernet/sing/common/buf"
+	"github.com/sagernet/sing/common/bufio"
+	E "github.com/sagernet/sing/common/exceptions"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/common/replay"
+
+	"github.com/gofrs/uuid"
+)
+
+var _ N.TCPConnectionHandler = (*Service[string])(nil)
+
+type Handler interface {
+	N.TCPConnectionHandler
+	N.UDPConnectionHandler
+}
+
+var (
+	ErrBadHeader    = E.New("bad header")
+	ErrBadTimestamp = E.New("bad timestamp")
+	ErrReplay       = E.New("replayed request")
+	ErrBadRequest   = E.New("bad request")
+	ErrBadVersion   = E.New("bad version")
+)
+
+type Service[U comparable] struct {
+	userKey      map[U][16]byte
+	userIdCipher map[U]cipher.Block
+	replayFilter replay.Filter
+	handler      Handler
+}
+
+func NewService[U comparable](handler Handler) *Service[U] {
+	return &Service[U]{
+		replayFilter: replay.NewSimple(time.Second * 120),
+		handler:      handler,
+	}
+}
+
+func (s *Service[U]) UpdateUsers(userList []U, userIdList []string) error {
+	userKeyMap := make(map[U][16]byte)
+	userIdCipherMap := make(map[U]cipher.Block)
+	for i, user := range userList {
+		userId := userIdList[i]
+		userUUID := uuid.FromStringOrNil(userId)
+		if userUUID == uuid.Nil {
+			userUUID = uuid.NewV5(userUUID, userId)
+		}
+		userCmdKey := Key(userUUID)
+		userKeyMap[user] = userCmdKey
+		userIdCipher, err := aes.NewCipher(KDF(userCmdKey[:], KDFSaltConstAuthIDEncryptionKey)[:16])
+		if err != nil {
+			return err
+		}
+		userIdCipherMap[user] = userIdCipher
+	}
+	s.userKey = userKeyMap
+	s.userIdCipher = userIdCipherMap
+	return nil
+}
+
+func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, metadata M.Metadata) error {
+	const headerLenBufferLen = 2 + CipherOverhead
+	const minHeaderLen = 16 + headerLenBufferLen + 8 + CipherOverhead + 42
+
+	_requestBuffer := buf.StackNew()
+	defer common.KeepAlive(_requestBuffer)
+	requestBuffer := common.Dup(_requestBuffer)
+	defer requestBuffer.Release()
+	n, err := requestBuffer.ReadFrom(conn)
+	if err != nil {
+		return err
+	} else if n < minHeaderLen {
+		return ErrBadHeader
+	}
+
+	authId := requestBuffer.To(16)
+	var decodedId [16]byte
+	var user U
+	var found bool
+	for currUser, userIdBlock := range s.userIdCipher {
+		userIdBlock.Decrypt(decodedId[:], authId)
+		timestamp := int64(binary.BigEndian.Uint64(decodedId[:]))
+		checksum := binary.BigEndian.Uint32(decodedId[12:])
+		if crc32.ChecksumIEEE(decodedId[:12]) != checksum {
+			continue
+		}
+		if math.Abs(math.Abs(float64(timestamp))-float64(time.Now().Unix())) > 120 {
+			return ErrBadTimestamp
+		}
+		if !s.replayFilter.Check(decodedId[:]) {
+			return ErrReplay
+		}
+		user = currUser
+		found = true
+		break
+	}
+	if !found {
+		return ErrBadRequest
+	}
+
+	ctx = auth.ContextWithUser(ctx, user)
+	cmdKey := s.userKey[user]
+	const nonceIndex = 16 + headerLenBufferLen
+	connectionNonce := requestBuffer.Range(nonceIndex, nonceIndex+8)
+
+	lengthKey := KDF(cmdKey[:], KDFSaltConstVMessHeaderPayloadLengthAEADKey, authId, connectionNonce)[:16]
+	lengthNonce := KDF(cmdKey[:], KDFSaltConstVMessHeaderPayloadLengthAEADIV, authId, connectionNonce)[:12]
+	lengthBuffer, err := newAesGcm(lengthKey).Open(requestBuffer.Index(16), lengthNonce, requestBuffer.Range(16, nonceIndex), authId)
+	if err != nil {
+		return err
+	}
+
+	const headerIndex = nonceIndex + 8
+	headerLength := int(binary.BigEndian.Uint16(lengthBuffer))
+	needRead := headerLength + headerIndex + CipherOverhead - requestBuffer.Len()
+	if needRead > 0 {
+		_, err = requestBuffer.ReadFullFrom(conn, needRead)
+		if err != nil {
+			return err
+		}
+	}
+
+	headerKey := KDF(cmdKey[:], KDFSaltConstVMessHeaderPayloadAEADKey, authId, connectionNonce)[:16]
+	headerNonce := KDF(cmdKey[:], KDFSaltConstVMessHeaderPayloadAEADIV, authId, connectionNonce)[:12]
+	headerBuffer, err := newAesGcm(headerKey).Open(requestBuffer.Index(headerIndex), headerNonce, requestBuffer.Range(headerIndex, headerIndex+headerLength+CipherOverhead), authId)
+	if err != nil {
+		return err
+	}
+	// replace with < if support mux
+	if len(headerBuffer) <= 38 {
+		return E.Extend(ErrBadHeader, io.ErrShortBuffer)
+	}
+	requestBuffer.Advance(headerIndex + headerLength + CipherOverhead)
+
+	version := headerBuffer[0]
+	if version != Version {
+		return E.Extend(ErrBadVersion, version)
+	}
+
+	requestBodyKey := headerBuffer[17:33]
+	requestBodyNonce := headerBuffer[1:17]
+	responseHeader := headerBuffer[33]
+	option := headerBuffer[34]
+	paddingLen := int(headerBuffer[35] >> 4)
+	security := headerBuffer[35] & 0x0F
+	command := headerBuffer[37]
+
+	headerReader := bytes.NewReader(headerBuffer[38:])
+	if command == CommandMux {
+		return E.New("mux unsupported")
+	} else if command == CommandUDP && option == 0 {
+		return E.New("bad packet connection")
+	}
+	destination, err := AddressSerializer.ReadAddrPort(headerReader)
+	if err != nil {
+		return err
+	}
+	metadata.Destination = destination
+
+	if paddingLen > 0 {
+		_, err = io.CopyN(io.Discard, headerReader, int64(paddingLen))
+		if err != nil {
+			return E.Extend(ErrBadHeader, "bad padding")
+		}
+	}
+
+	var reader io.Reader = conn
+	if requestBuffer.Len() > 0 {
+		reader = bufio.NewCachedReader(reader, requestBuffer)
+	}
+	reader = CreateReader(reader, nil, requestBodyKey, requestBodyNonce, requestBodyKey, requestBodyNonce, security, option)
+	if option&RequestOptionChunkStream != 0 && command == CommandTCP {
+		readerBuffer := buf.New()
+		reader = bufio.NewBufferedReader(reader, readerBuffer)
+	}
+
+	rawConn := rawServerConn{
+		Conn:           conn,
+		requestKey:     requestBodyKey,
+		requestNonce:   requestBodyNonce,
+		responseHeader: responseHeader,
+		security:       security,
+		option:         option,
+		reader:         bufio.NewExtendedReader(reader),
+	}
+
+	if command == CommandTCP {
+		return s.handler.NewConnection(ctx, &serverConn{rawConn}, metadata)
+	} else {
+		return s.handler.NewPacketConnection(ctx, &serverPacketConn{rawConn, destination}, metadata)
+	}
+}
+
+type rawServerConn struct {
+	net.Conn
+	requestKey     []byte
+	requestNonce   []byte
+	responseHeader byte
+	security       byte
+	option         byte
+	reader         N.ExtendedReader
+	writer         N.ExtendedWriter
+}
+
+func (c *rawServerConn) writeResponse() error {
+	_responseBuffer := buf.StackNewSize(2 + CipherOverhead + 4 + CipherOverhead)
+	defer common.KeepAlive(_responseBuffer)
+	responseBuffer := common.Dup(_responseBuffer)
+	defer responseBuffer.Release()
+
+	_responseKey := sha256.Sum256(c.requestKey[:])
+	responseKey := _responseKey[:16]
+	_responseNonce := sha256.Sum256(c.requestNonce[:])
+	responseNonce := _responseNonce[:16]
+
+	headerLenKey := KDF(responseKey, KDFSaltConstAEADRespHeaderLenKey)[:16]
+	headerLenNonce := KDF(responseNonce, KDFSaltConstAEADRespHeaderLenIV)[:12]
+	headerLenCipher := newAesGcm(headerLenKey)
+	binary.BigEndian.PutUint16(responseBuffer.Extend(2), 4)
+	headerLenCipher.Seal(responseBuffer.Index(0), headerLenNonce, responseBuffer.Bytes(), nil)
+	responseBuffer.Extend(CipherOverhead)
+
+	headerKey := KDF(responseKey, KDFSaltConstAEADRespHeaderPayloadKey)[:16]
+	headerNonce := KDF(responseNonce, KDFSaltConstAEADRespHeaderPayloadIV)[:12]
+	headerCipher := newAesGcm(headerKey)
+	common.Must(
+		responseBuffer.WriteByte(c.responseHeader),
+		responseBuffer.WriteByte(c.option),
+		responseBuffer.WriteZeroN(2),
+	)
+	const headerIndex = 2 + CipherOverhead
+	headerCipher.Seal(responseBuffer.Index(headerIndex), headerNonce, responseBuffer.From(headerIndex), nil)
+	responseBuffer.Extend(CipherOverhead)
+
+	_, err := c.Conn.Write(responseBuffer.Bytes())
+	if err != nil {
+		return err
+	}
+
+	writer := CreateWriter(c.Conn, c.requestKey, c.requestNonce, responseKey, responseNonce, c.security, c.option)
+	c.writer = bufio.NewExtendedWriter(writer)
+
+	return nil
+}
+
+func (c *rawServerConn) Close() error {
+	return common.Close(
+		c.Conn,
+		c.reader,
+	)
+}
+
+func (c *rawServerConn) Upstream() any {
+	return c.Conn
+}
+
+type serverConn struct {
+	rawServerConn
+}
+
+func (c *serverConn) Read(b []byte) (n int, err error) {
+	return c.reader.Read(b)
+}
+
+func (c *serverConn) Write(b []byte) (n int, err error) {
+	if c.writer == nil {
+		err = c.writeResponse()
+		if err != nil {
+			return
+		}
+	}
+	return c.writer.Write(b)
+}
+
+func (c *serverConn) ReadBuffer(buffer *buf.Buffer) error {
+	return c.reader.ReadBuffer(buffer)
+}
+
+func (c *serverConn) WriteBuffer(buffer *buf.Buffer) error {
+	if c.writer == nil {
+		err := c.writeResponse()
+		if err != nil {
+			return err
+		}
+	}
+	return c.writer.WriteBuffer(buffer)
+}
+
+func (c *serverConn) WriteTo(w io.Writer) (n int64, err error) {
+	return bufio.Copy(w, c.reader)
+}
+
+func (c *serverConn) ReadFrom(r io.Reader) (n int64, err error) {
+	if c.writer == nil {
+		err = c.writeResponse()
+		if err != nil {
+			return
+		}
+	}
+	return bufio.Copy(c.writer, r)
+}
+
+var _ N.NetPacketConn = (*serverPacketConn)(nil)
+
+type serverPacketConn struct {
+	rawServerConn
+	destination M.Socksaddr
+}
+
+func (c *serverPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
+	n, err = c.reader.Read(p)
+	if err != nil {
+		return
+	}
+	addr = c.destination.UDPAddr()
+	return
+}
+
+func (c *serverPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
+	if c.writer == nil {
+		err = c.writeResponse()
+		if err != nil {
+			return
+		}
+	}
+	return c.writer.Write(p)
+}
+
+func (c *serverPacketConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksaddr, err error) {
+	err = c.reader.ReadBuffer(buffer)
+	if err != nil {
+		return
+	}
+	destination = c.destination
+	return
+}
+
+func (c *serverPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) error {
+	if c.writer == nil {
+		err := c.writeResponse()
+		if err != nil {
+			return err
+		}
+	}
+	return c.writer.WriteBuffer(buffer)
+}
