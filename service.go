@@ -84,7 +84,7 @@ func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 	defer common.KeepAlive(_requestBuffer)
 	requestBuffer := common.Dup(_requestBuffer)
 	defer requestBuffer.Release()
-	n, err := requestBuffer.ReadFrom(conn)
+	n, err := requestBuffer.ReadOnceFrom(conn)
 	if err != nil {
 		return err
 	} else if n < minHeaderLen {

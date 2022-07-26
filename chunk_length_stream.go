@@ -135,7 +135,7 @@ func (w *StreamChunkWriter) WriteBuffer(buffer *buf.Buffer) error {
 	}
 	binary.BigEndian.PutUint16(buffer.ExtendHeader(2), dataLen)
 	if paddingLen > 0 {
-		_, err := io.CopyN(buffer, rand.Reader, int64(paddingLen))
+		_, err := buffer.ReadFullFrom(rand.Reader, int(paddingLen))
 		if err != nil {
 			return err
 		}

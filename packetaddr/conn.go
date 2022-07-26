@@ -66,7 +66,7 @@ func (c *PacketConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksaddr, er
 }
 
 func (c *PacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) error {
-	if destination.Family().IsFqdn() {
+	if destination.IsFqdn() {
 		return E.Extend(ErrFqdnUnpported, destination.Fqdn)
 	}
 	header := buf.With(buffer.Extend(AddressSerializer.AddrPortLen(destination)))
