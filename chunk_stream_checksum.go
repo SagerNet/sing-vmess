@@ -72,6 +72,10 @@ func (w *StreamChecksumWriter) WriteBuffer(buffer *buf.Buffer) error {
 	return common.Error(w.upstream.Write(buffer.Bytes()))
 }
 
+func (w *StreamChecksumWriter) Headroom() int {
+	return 4
+}
+
 func (w *StreamChecksumWriter) Upstream() any {
 	return w.upstream
 }

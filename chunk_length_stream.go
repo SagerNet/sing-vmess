@@ -178,6 +178,10 @@ func (w *StreamChunkWriter) WriteWithChecksum(checksum uint32, p []byte) (n int,
 	return
 }
 
+func (w *StreamChunkWriter) Headroom() int {
+	return 2
+}
+
 func (w *StreamChunkWriter) Upstream() any {
 	return w.upstream
 }
