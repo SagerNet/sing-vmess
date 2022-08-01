@@ -2,7 +2,9 @@
 
 Some confusing protocol.
 
-### TODO
+### Features
+
+100% compatible with `v2ray-core`.
 
 - [x] Stream length chunk with padding and masking
 - [x] AEAD length chunk with padding
