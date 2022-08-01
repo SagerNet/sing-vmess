@@ -10,5 +10,5 @@ Some confusing protocol.
 - [x] AEAD Chunk
 - [x] Legacy client
 - [x] AEAD Client
-- [ ] Legacy server
+- [x] Legacy server
 - [x] AEAD Server

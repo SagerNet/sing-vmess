@@ -22,8 +22,9 @@ import (
 )
 
 const (
-	Version      = 1
-	MaxChunkSize = 16 * 1024
+	Version              = 1
+	MaxChunkSize         = 16 * 1024
+	CacheDurationSeconds = 120
 )
 
 const (
@@ -67,6 +68,8 @@ const (
 const (
 	CipherOverhead = 16
 )
+
+type TimeFunc = func() time.Time
 
 var (
 	ErrUnsupportedSecurityType = E.New("vmess: unsupported security type")
@@ -208,7 +211,7 @@ func CreateReader(upstream io.Reader, streamReader io.Reader, requestKey []byte,
 	}
 }
 
-func CreateWriter(upstream io.Writer, requestKey []byte, requestNonce []byte, key []byte, nonce []byte, security byte, option byte) io.Writer {
+func CreateWriter(upstream io.Writer, streamWriter io.Writer, requestKey []byte, requestNonce []byte, key []byte, nonce []byte, security byte, option byte) io.Writer {
 	switch security {
 	case SecurityTypeNone:
 		if option&RequestOptionChunkStream != 0 {
@@ -217,6 +220,9 @@ func CreateWriter(upstream io.Writer, requestKey []byte, requestNonce []byte, ke
 			return upstream
 		}
 	case SecurityTypeLegacy:
+		if streamWriter == nil {
+			streamWriter = NewStreamWriter(upstream, key, nonce)
+		}
 		if option&RequestOptionChunkStream != 0 {
 			var globalPadding sha3.ShakeHash
 			if option&RequestOptionGlobalPadding != 0 {
@@ -232,7 +238,7 @@ func CreateWriter(upstream io.Writer, requestKey []byte, requestNonce []byte, ke
 					common.Must1(chunkMasking.Write(nonce))
 				}
 			}
-			return bufio.NewChunkWriter(NewStreamChecksumWriter(NewStreamChunkWriter(NewStreamWriter(upstream, key, nonce), chunkMasking, globalPadding)), MaxChunkSize)
+			return bufio.NewChunkWriter(NewStreamChecksumWriter(NewStreamChunkWriter(streamWriter, chunkMasking, globalPadding)), MaxChunkSize)
 		}
 		return NewStreamWriter(upstream, key, nonce)
 	case SecurityTypeAes128Gcm:

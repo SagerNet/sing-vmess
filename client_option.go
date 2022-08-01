@@ -13,3 +13,9 @@ func ClientWithAuthenticatedLength() ClientOption {
 		client.authenticatedLength = true
 	}
 }
+
+func ClientWithTimeFunc(timeFunc TimeFunc) ClientOption {
+	return func(client *Client) {
+		client.time = timeFunc
+	}
+}

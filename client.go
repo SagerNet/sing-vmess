@@ -28,9 +28,9 @@ type Client struct {
 	security            byte
 	globalPadding       bool
 	authenticatedLength bool
-
-	alterId  int
-	alterKey [16]byte
+	time                TimeFunc
+	alterId             int
+	alterKey            [16]byte
 }
 
 func NewClient(userId string, security string, alterId int, options ...ClientOption) (*Client, error) {
@@ -57,15 +57,10 @@ func NewClient(userId string, security string, alterId int, options ...ClientOpt
 	client := &Client{
 		key:      Key(user),
 		security: rawSecurity,
+		time:     time.Now,
 		alterId:  alterId,
 	}
 	if alterId > 0 {
-		/*client.alterKeys = make([][16]byte, alterId)
-		currentId := user
-		for i := range client.alterKeys {
-			currentId = AlterId(currentId)
-			client.alterKeys[i] = Key(currentId)
-		}*/
 		client.alterKey = AlterId(user)
 	}
 	for _, option := range options {
@@ -181,7 +176,7 @@ func (c *rawClientConn) writeHandshake() error {
 		requestBuffer := common.Dup(_requestBuffer)
 		defer requestBuffer.Release()
 
-		timestamp := uint64(time.Now().Unix())
+		timestamp := uint64(c.time().Unix())
 		idHash := hmac.New(md5.New, c.alterKey[:])
 		common.Must(binary.Write(idHash, binary.BigEndian, timestamp))
 		idHash.Sum(requestBuffer.Extend(md5.Size)[:0])
@@ -200,7 +195,7 @@ func (c *rawClientConn) writeHandshake() error {
 		if err != nil {
 			return err
 		}
-		c.writer = bufio.NewExtendedWriter(CreateWriter(c.Conn, c.requestKey[:], c.requestNonce[:], c.requestKey[:], c.requestNonce[:], c.security, c.option))
+		c.writer = bufio.NewExtendedWriter(CreateWriter(c.Conn, nil, c.requestKey[:], c.requestNonce[:], c.requestKey[:], c.requestNonce[:], c.security, c.option))
 	} else {
 		const headerLenBufferLen = 2 + CipherOverhead
 
@@ -215,7 +210,7 @@ func (c *rawClientConn) writeHandshake() error {
 		requestBuffer := common.Dup(_requestBuffer)
 		defer requestBuffer.Release()
 
-		AuthID(c.key, time.Now(), requestBuffer)
+		AuthID(c.key, c.time(), requestBuffer)
 		authId := requestBuffer.Bytes()
 
 		headerLenBuffer := buf.With(requestBuffer.Extend(headerLenBufferLen))
@@ -236,7 +231,7 @@ func (c *rawClientConn) writeHandshake() error {
 		if err != nil {
 			return err
 		}
-		c.writer = bufio.NewExtendedWriter(CreateWriter(c.Conn, c.requestKey[:], c.requestNonce[:], c.requestKey[:], c.requestNonce[:], c.security, c.option))
+		c.writer = bufio.NewExtendedWriter(CreateWriter(c.Conn, nil, c.requestKey[:], c.requestNonce[:], c.requestKey[:], c.requestNonce[:], c.security, c.option))
 	}
 	if c.option&RequestOptionChunkStream != 0 && c.command == CommandTCP {
 		c.writer = bufio.NewLimitedWriter(c.writer, 65535-CipherOverhead*2)

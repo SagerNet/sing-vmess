@@ -5,6 +5,8 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
+	"crypto/md5"
 	"crypto/sha256"
 	"encoding/binary"
 	"hash/crc32"
@@ -12,6 +14,7 @@ import (
 	"math"
 	"net"
 	"time"
+	"unsafe"
 
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/auth"
@@ -21,6 +24,7 @@ import (
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/common/replay"
+	"github.com/sagernet/sing/common/rw"
 
 	"github.com/gofrs/uuid"
 )
@@ -41,22 +45,41 @@ var (
 )
 
 type Service[U comparable] struct {
-	userKey      map[U][16]byte
-	userIdCipher map[U]cipher.Block
-	replayFilter replay.Filter
-	handler      Handler
+	userKey           map[U][16]byte
+	userIdCipher      map[U]cipher.Block
+	replayFilter      replay.Filter
+	handler           Handler
+	time              func() time.Time
+	alterIds          map[U][][16]byte
+	alterIdUpdateTime map[U]int64
+	alterIdMap        map[[16]byte]legacyUserEntry[U]
+	alterIdUpdateTask *time.Ticker
+	alterIdUpdateDone chan struct{}
 }
 
-func NewService[U comparable](handler Handler) *Service[U] {
-	return &Service[U]{
+type legacyUserEntry[U comparable] struct {
+	User  U
+	Time  int64
+	Index int
+}
+
+func NewService[U comparable](handler Handler, options ...ServiceOption) *Service[U] {
+	service := &Service[U]{
 		replayFilter: replay.NewSimple(time.Second * 120),
 		handler:      handler,
+		time:         time.Now,
 	}
+	anyService := (*Service[string])(unsafe.Pointer(service))
+	for _, option := range options {
+		option(anyService)
+	}
+	return service
 }
 
-func (s *Service[U]) UpdateUsers(userList []U, userIdList []string) error {
+func (s *Service[U]) UpdateUsers(userList []U, userIdList []string, alterIdList []int) error {
 	userKeyMap := make(map[U][16]byte)
 	userIdCipherMap := make(map[U]cipher.Block)
+	userAlterIds := make(map[U][][16]byte)
 	for i, user := range userList {
 		userId := userIdList[i]
 		userUUID := uuid.FromStringOrNil(userId)
@@ -70,10 +93,80 @@ func (s *Service[U]) UpdateUsers(userList []U, userIdList []string) error {
 			return err
 		}
 		userIdCipherMap[user] = userIdCipher
+		alterId := alterIdList[i]
+		if alterId > 0 {
+			alterIds := make([][16]byte, 0, alterId)
+			currentId := userUUID
+			for j := 0; j < alterId; j++ {
+				currentId = AlterId(currentId)
+				alterIds = append(alterIds, currentId)
+			}
+			userAlterIds[user] = alterIds
+		}
 	}
 	s.userKey = userKeyMap
 	s.userIdCipher = userIdCipherMap
+	s.alterIds = userAlterIds
+	s.alterIdUpdateTime = make(map[U]int64)
+	s.generateLegacyKeys()
 	return nil
+}
+
+func (s *Service[U]) Start() error {
+	const updateInterval = 10 * time.Second
+	if len(s.alterIds) > 0 {
+		s.alterIdUpdateTask = time.NewTicker(updateInterval)
+		s.alterIdUpdateDone = make(chan struct{})
+		go s.loopGenerateLegacyKeys()
+	}
+	return nil
+}
+
+func (s *Service[U]) Close() error {
+	if s.alterIdUpdateTask != nil {
+		s.alterIdUpdateTask.Stop()
+		close(s.alterIdUpdateDone)
+	}
+	return nil
+}
+
+func (s *Service[U]) loopGenerateLegacyKeys() {
+	for {
+		select {
+		case <-s.alterIdUpdateDone:
+			return
+		case <-s.alterIdUpdateTask.C:
+		}
+		s.generateLegacyKeys()
+	}
+}
+
+func (s *Service[U]) generateLegacyKeys() {
+	nowSec := s.time().Unix()
+	endSec := nowSec + CacheDurationSeconds
+	var hashValue [16]byte
+
+	userAlterIdMap := make(map[[16]byte]legacyUserEntry[U])
+	userAlterIdUpdateTime := make(map[U]int64)
+
+	for user, alterIds := range s.alterIds {
+		beginSec := s.alterIdUpdateTime[user]
+		if beginSec < nowSec-CacheDurationSeconds {
+			beginSec = nowSec - CacheDurationSeconds
+		}
+		for i, alterId := range alterIds {
+			idHash := hmac.New(md5.New, alterId[:])
+			for ts := beginSec; ts <= endSec; ts++ {
+				common.Must(binary.Write(idHash, binary.BigEndian, uint64(ts)))
+				idHash.Sum(hashValue[:0])
+				idHash.Reset()
+				userAlterIdMap[hashValue] = legacyUserEntry[U]{user, ts, i}
+			}
+		}
+		userAlterIdUpdateTime[user] = nowSec
+	}
+	s.alterIdUpdateTime = userAlterIdUpdateTime
+	s.alterIdMap = userAlterIdMap
 }
 
 func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, metadata M.Metadata) error {
@@ -87,8 +180,6 @@ func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 	n, err := requestBuffer.ReadOnceFrom(conn)
 	if err != nil {
 		return err
-	} else if n < minHeaderLen {
-		return ErrBadHeader
 	}
 
 	authId := requestBuffer.To(16)
@@ -105,6 +196,9 @@ func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 		if math.Abs(math.Abs(float64(timestamp))-float64(time.Now().Unix())) > 120 {
 			return ErrBadTimestamp
 		}
+		if n < minHeaderLen {
+			return ErrBadHeader
+		}
 		if !s.replayFilter.Check(decodedId[:]) {
 			return ErrReplay
 		}
@@ -112,43 +206,79 @@ func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 		found = true
 		break
 	}
+
+	var legacyProtocol bool
+	var legacyTimestamp uint64
+	if !found {
+		copy(decodedId[:], authId)
+		if currUser, loaded := s.alterIdMap[decodedId]; loaded {
+			found = true
+			legacyProtocol = true
+			user = currUser.User
+			legacyTimestamp = uint64(currUser.Time)
+		}
+	}
 	if !found {
 		return ErrBadRequest
 	}
 
 	ctx = auth.ContextWithUser(ctx, user)
 	cmdKey := s.userKey[user]
-	const nonceIndex = 16 + headerLenBufferLen
-	connectionNonce := requestBuffer.Range(nonceIndex, nonceIndex+8)
+	var headerReader io.Reader
+	var headerBuffer []byte
 
-	lengthKey := KDF(cmdKey[:], KDFSaltConstVMessHeaderPayloadLengthAEADKey, authId, connectionNonce)[:16]
-	lengthNonce := KDF(cmdKey[:], KDFSaltConstVMessHeaderPayloadLengthAEADIV, authId, connectionNonce)[:12]
-	lengthBuffer, err := newAesGcm(lengthKey).Open(requestBuffer.Index(16), lengthNonce, requestBuffer.Range(16, nonceIndex), authId)
-	if err != nil {
-		return err
-	}
+	var reader io.Reader
+	if legacyProtocol {
+		requestBuffer.Advance(16)
+		reader = io.MultiReader(bytes.NewReader(requestBuffer.Bytes()), conn)
 
-	const headerIndex = nonceIndex + 8
-	headerLength := int(binary.BigEndian.Uint16(lengthBuffer))
-	needRead := headerLength + headerIndex + CipherOverhead - requestBuffer.Len()
-	if needRead > 0 {
-		_, err = requestBuffer.ReadFullFrom(conn, needRead)
+		timeHash := md5.New()
+		common.Must(binary.Write(timeHash, binary.BigEndian, legacyTimestamp))
+		common.Must(binary.Write(timeHash, binary.BigEndian, legacyTimestamp))
+		common.Must(binary.Write(timeHash, binary.BigEndian, legacyTimestamp))
+		common.Must(binary.Write(timeHash, binary.BigEndian, legacyTimestamp))
+		userKey := s.userKey[user]
+		headerReader = NewStreamReader(reader, userKey[:], timeHash.Sum(nil))
+		headerBuffer, err = rw.ReadBytes(headerReader, 38)
+		if err != nil {
+			return E.Extend(ErrBadHeader, io.ErrShortBuffer)
+		}
+	} else {
+		reader = conn
+
+		const nonceIndex = 16 + headerLenBufferLen
+		connectionNonce := requestBuffer.Range(nonceIndex, nonceIndex+8)
+
+		lengthKey := KDF(cmdKey[:], KDFSaltConstVMessHeaderPayloadLengthAEADKey, authId, connectionNonce)[:16]
+		lengthNonce := KDF(cmdKey[:], KDFSaltConstVMessHeaderPayloadLengthAEADIV, authId, connectionNonce)[:12]
+		lengthBuffer, err := newAesGcm(lengthKey).Open(requestBuffer.Index(16), lengthNonce, requestBuffer.Range(16, nonceIndex), authId)
 		if err != nil {
 			return err
 		}
-	}
 
-	headerKey := KDF(cmdKey[:], KDFSaltConstVMessHeaderPayloadAEADKey, authId, connectionNonce)[:16]
-	headerNonce := KDF(cmdKey[:], KDFSaltConstVMessHeaderPayloadAEADIV, authId, connectionNonce)[:12]
-	headerBuffer, err := newAesGcm(headerKey).Open(requestBuffer.Index(headerIndex), headerNonce, requestBuffer.Range(headerIndex, headerIndex+headerLength+CipherOverhead), authId)
-	if err != nil {
-		return err
+		const headerIndex = nonceIndex + 8
+		headerLength := int(binary.BigEndian.Uint16(lengthBuffer))
+		needRead := headerLength + headerIndex + CipherOverhead - requestBuffer.Len()
+		if needRead > 0 {
+			_, err = requestBuffer.ReadFullFrom(conn, needRead)
+			if err != nil {
+				return err
+			}
+		}
+
+		headerKey := KDF(cmdKey[:], KDFSaltConstVMessHeaderPayloadAEADKey, authId, connectionNonce)[:16]
+		headerNonce := KDF(cmdKey[:], KDFSaltConstVMessHeaderPayloadAEADIV, authId, connectionNonce)[:12]
+		headerBuffer, err = newAesGcm(headerKey).Open(requestBuffer.Index(headerIndex), headerNonce, requestBuffer.Range(headerIndex, headerIndex+headerLength+CipherOverhead), authId)
+		if err != nil {
+			return err
+		}
+		// replace with < if support mux
+		if len(headerBuffer) <= 38 {
+			return E.Extend(ErrBadHeader, io.ErrShortBuffer)
+		}
+		requestBuffer.Advance(headerIndex + headerLength + CipherOverhead)
+		headerReader = bytes.NewReader(headerBuffer[38:])
 	}
-	// replace with < if support mux
-	if len(headerBuffer) <= 38 {
-		return E.Extend(ErrBadHeader, io.ErrShortBuffer)
-	}
-	requestBuffer.Advance(headerIndex + headerLength + CipherOverhead)
 
 	version := headerBuffer[0]
 	if version != Version {
@@ -162,8 +292,6 @@ func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 	paddingLen := int(headerBuffer[35] >> 4)
 	security := headerBuffer[35] & 0x0F
 	command := headerBuffer[37]
-
-	headerReader := bytes.NewReader(headerBuffer[38:])
 	if command == CommandMux {
 		return E.New("mux unsupported")
 	} else if command == CommandUDP && option == 0 {
@@ -174,16 +302,17 @@ func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 		return err
 	}
 	metadata.Destination = destination
-
 	if paddingLen > 0 {
 		_, err = io.CopyN(io.Discard, headerReader, int64(paddingLen))
 		if err != nil {
 			return E.Extend(ErrBadHeader, "bad padding")
 		}
 	}
-
-	var reader io.Reader = conn
-	if requestBuffer.Len() > 0 {
+	err = rw.SkipN(headerReader, 4)
+	if err != nil {
+		return err
+	}
+	if !legacyProtocol && requestBuffer.Len() > 0 {
 		reader = bufio.NewCachedReader(reader, requestBuffer)
 	}
 	reader = CreateReader(reader, nil, requestBodyKey, requestBodyNonce, requestBodyKey, requestBodyNonce, security, option)
@@ -191,9 +320,9 @@ func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 		readerBuffer := buf.New()
 		reader = bufio.NewBufferedReader(reader, readerBuffer)
 	}
-
 	rawConn := rawServerConn{
 		Conn:           conn,
+		legacyProtocol: legacyProtocol,
 		requestKey:     requestBodyKey,
 		requestNonce:   requestBodyNonce,
 		responseHeader: responseHeader,
@@ -211,6 +340,7 @@ func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 
 type rawServerConn struct {
 	net.Conn
+	legacyProtocol bool
 	requestKey     []byte
 	requestNonce   []byte
 	responseHeader byte
@@ -221,43 +351,52 @@ type rawServerConn struct {
 }
 
 func (c *rawServerConn) writeResponse() error {
-	_responseBuffer := buf.StackNewSize(2 + CipherOverhead + 4 + CipherOverhead)
-	defer common.KeepAlive(_responseBuffer)
-	responseBuffer := common.Dup(_responseBuffer)
-	defer responseBuffer.Release()
+	if c.legacyProtocol {
+		responseKey := md5.Sum(c.requestKey)
+		responseNonce := md5.Sum(c.requestNonce)
+		headerWriter := NewStreamWriter(c.Conn, responseKey[:], responseNonce[:])
+		_, err := headerWriter.Write([]byte{c.responseHeader, c.option, 0, 0})
+		if err != nil {
+			return E.Cause(err, "write response")
+		}
+		c.writer = bufio.NewExtendedWriter(CreateWriter(c.Conn, headerWriter, c.requestKey, c.requestNonce, responseKey[:], responseNonce[:], c.security, c.option))
+	} else {
+		_responseBuffer := buf.StackNewSize(2 + CipherOverhead + 4 + CipherOverhead)
+		defer common.KeepAlive(_responseBuffer)
+		responseBuffer := common.Dup(_responseBuffer)
+		defer responseBuffer.Release()
 
-	_responseKey := sha256.Sum256(c.requestKey[:])
-	responseKey := _responseKey[:16]
-	_responseNonce := sha256.Sum256(c.requestNonce[:])
-	responseNonce := _responseNonce[:16]
+		_responseKey := sha256.Sum256(c.requestKey[:])
+		responseKey := _responseKey[:16]
+		_responseNonce := sha256.Sum256(c.requestNonce[:])
+		responseNonce := _responseNonce[:16]
 
-	headerLenKey := KDF(responseKey, KDFSaltConstAEADRespHeaderLenKey)[:16]
-	headerLenNonce := KDF(responseNonce, KDFSaltConstAEADRespHeaderLenIV)[:12]
-	headerLenCipher := newAesGcm(headerLenKey)
-	binary.BigEndian.PutUint16(responseBuffer.Extend(2), 4)
-	headerLenCipher.Seal(responseBuffer.Index(0), headerLenNonce, responseBuffer.Bytes(), nil)
-	responseBuffer.Extend(CipherOverhead)
+		headerLenKey := KDF(responseKey, KDFSaltConstAEADRespHeaderLenKey)[:16]
+		headerLenNonce := KDF(responseNonce, KDFSaltConstAEADRespHeaderLenIV)[:12]
+		headerLenCipher := newAesGcm(headerLenKey)
+		binary.BigEndian.PutUint16(responseBuffer.Extend(2), 4)
+		headerLenCipher.Seal(responseBuffer.Index(0), headerLenNonce, responseBuffer.Bytes(), nil)
+		responseBuffer.Extend(CipherOverhead)
 
-	headerKey := KDF(responseKey, KDFSaltConstAEADRespHeaderPayloadKey)[:16]
-	headerNonce := KDF(responseNonce, KDFSaltConstAEADRespHeaderPayloadIV)[:12]
-	headerCipher := newAesGcm(headerKey)
-	common.Must(
-		responseBuffer.WriteByte(c.responseHeader),
-		responseBuffer.WriteByte(c.option),
-		responseBuffer.WriteZeroN(2),
-	)
-	const headerIndex = 2 + CipherOverhead
-	headerCipher.Seal(responseBuffer.Index(headerIndex), headerNonce, responseBuffer.From(headerIndex), nil)
-	responseBuffer.Extend(CipherOverhead)
+		headerKey := KDF(responseKey, KDFSaltConstAEADRespHeaderPayloadKey)[:16]
+		headerNonce := KDF(responseNonce, KDFSaltConstAEADRespHeaderPayloadIV)[:12]
+		headerCipher := newAesGcm(headerKey)
+		common.Must(
+			responseBuffer.WriteByte(c.responseHeader),
+			responseBuffer.WriteByte(c.option),
+			responseBuffer.WriteZeroN(2),
+		)
+		const headerIndex = 2 + CipherOverhead
+		headerCipher.Seal(responseBuffer.Index(headerIndex), headerNonce, responseBuffer.From(headerIndex), nil)
+		responseBuffer.Extend(CipherOverhead)
 
-	_, err := c.Conn.Write(responseBuffer.Bytes())
-	if err != nil {
-		return err
+		_, err := c.Conn.Write(responseBuffer.Bytes())
+		if err != nil {
+			return err
+		}
+
+		c.writer = bufio.NewExtendedWriter(CreateWriter(c.Conn, nil, c.requestKey, c.requestNonce, responseKey, responseNonce, c.security, c.option))
 	}
-
-	writer := CreateWriter(c.Conn, c.requestKey, c.requestNonce, responseKey, responseNonce, c.security, c.option)
-	c.writer = bufio.NewExtendedWriter(writer)
-
 	return nil
 }
 
