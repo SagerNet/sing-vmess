@@ -23,7 +23,7 @@ import (
 
 const (
 	Version              = 1
-	MaxChunkSize         = 16 * 1024
+	MaxChunkSize         = 16384 - CipherOverhead*2
 	CacheDurationSeconds = 120
 )
 

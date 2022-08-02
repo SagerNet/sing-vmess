@@ -437,6 +437,7 @@ func (c *serverConn) WriteBuffer(buffer *buf.Buffer) error {
 	if c.writer == nil {
 		err := c.writeResponse()
 		if err != nil {
+			buffer.Release()
 			return err
 		}
 	}

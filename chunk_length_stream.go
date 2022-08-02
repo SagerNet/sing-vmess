@@ -137,6 +137,7 @@ func (w *StreamChunkWriter) WriteBuffer(buffer *buf.Buffer) error {
 	if paddingLen > 0 {
 		_, err := buffer.ReadFullFrom(rand.Reader, int(paddingLen))
 		if err != nil {
+			buffer.Release()
 			return err
 		}
 	}

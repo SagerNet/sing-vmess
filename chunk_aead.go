@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"io"
 
-	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/buf"
 	"github.com/sagernet/sing/common/bufio"
 	N "github.com/sagernet/sing/common/network"
@@ -96,7 +95,15 @@ func NewChacha20Poly1305Writer(upstream io.Writer, key []byte, nonce []byte) *AE
 }
 
 func (w *AEADWriter) Write(p []byte) (n int, err error) {
-	_buffer := buf.StackNewSize(len(p) + CipherOverhead)
+	// TODO: fix stack buffer
+	buffer := buf.New()
+	_, err = buffer.Write(p)
+	if err != nil {
+		buffer.Release()
+		return
+	}
+	return bufio.Write(w, buffer)
+	/*_buffer := buf.StackNewSize(len(p) + CipherOverhead)
 	defer common.KeepAlive(_buffer)
 	buffer := common.Dup(_buffer)
 	defer buffer.Release()
@@ -108,7 +115,7 @@ func (w *AEADWriter) Write(p []byte) (n int, err error) {
 	if err == nil {
 		n = len(p)
 	}
-	return
+	return*/
 }
 
 func (w *AEADWriter) WriteBuffer(buffer *buf.Buffer) error {
@@ -117,4 +124,8 @@ func (w *AEADWriter) WriteBuffer(buffer *buf.Buffer) error {
 	w.cipher.Seal(buffer.Index(0), w.nonce, buffer.Bytes(), nil)
 	buffer.Extend(CipherOverhead)
 	return w.upstream.WriteBuffer(buffer)
+}
+
+func (w *AEADWriter) Headroom() int {
+	return CipherOverhead
 }

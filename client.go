@@ -233,9 +233,6 @@ func (c *rawClientConn) writeHandshake() error {
 		}
 		c.writer = bufio.NewExtendedWriter(CreateWriter(c.Conn, nil, c.requestKey[:], c.requestNonce[:], c.requestKey[:], c.requestNonce[:], c.security, c.option))
 	}
-	if c.option&RequestOptionChunkStream != 0 && c.command == CommandTCP {
-		c.writer = bufio.NewLimitedWriter(c.writer, 65535-CipherOverhead*2)
-	}
 	return nil
 }
 
