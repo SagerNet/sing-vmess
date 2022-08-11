@@ -12,4 +12,4 @@ var AddressSerializer = M.NewSerializer(
 	M.AddressFamilyByte(0x02, M.AddressFamilyIPv6),
 )
 
-var ErrFqdnUnpported = E.New("packetaddr: fqdn unsupported")
+var ErrFqdnUnsupported = E.New("packetaddr: fqdn unsupported")

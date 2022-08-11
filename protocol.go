@@ -23,8 +23,12 @@ import (
 
 const (
 	Version              = 1
-	MaxChunkSize         = 16384 - CipherOverhead*2
+	ReadChunkSize        = 16384
+	WriteChunkSize       = 15000
 	CacheDurationSeconds = 120
+	MaxPaddingSize       = 64
+	MaxFrontHeadroom     = 2 + CipherOverhead
+	MaxRearHeadroom      = CipherOverhead*2 + MaxPaddingSize
 )
 
 const (
@@ -215,7 +219,7 @@ func CreateWriter(upstream io.Writer, streamWriter io.Writer, requestKey []byte,
 	switch security {
 	case SecurityTypeNone:
 		if option&RequestOptionChunkStream != 0 {
-			return bufio.NewChunkWriter(NewStreamChunkWriter(upstream, nil, nil), MaxChunkSize)
+			return bufio.NewChunkWriter(NewStreamChunkWriter(upstream, nil, nil), WriteChunkSize)
 		} else {
 			return upstream
 		}
@@ -238,7 +242,7 @@ func CreateWriter(upstream io.Writer, streamWriter io.Writer, requestKey []byte,
 					common.Must1(chunkMasking.Write(nonce))
 				}
 			}
-			return bufio.NewChunkWriter(NewStreamChecksumWriter(NewStreamChunkWriter(streamWriter, chunkMasking, globalPadding)), MaxChunkSize)
+			return bufio.NewChunkWriter(NewStreamChecksumWriter(NewStreamChunkWriter(streamWriter, chunkMasking, globalPadding)), WriteChunkSize)
 		}
 		return NewStreamWriter(upstream, key, nonce)
 	case SecurityTypeAes128Gcm:
@@ -262,7 +266,7 @@ func CreateWriter(upstream io.Writer, streamWriter io.Writer, requestKey []byte,
 			}
 			writer = NewStreamChunkWriter(upstream, chunkMasking, globalPadding)
 		}
-		return bufio.NewChunkWriter(NewAes128GcmWriter(writer, key, nonce), MaxChunkSize)
+		return bufio.NewChunkWriter(NewAes128GcmWriter(writer, key, nonce), WriteChunkSize)
 	case SecurityTypeChacha20Poly1305:
 		var chunkWriter io.Writer
 		var globalPadding sha3.ShakeHash
@@ -284,7 +288,7 @@ func CreateWriter(upstream io.Writer, streamWriter io.Writer, requestKey []byte,
 			}
 			chunkWriter = NewStreamChunkWriter(upstream, chunkMasking, globalPadding)
 		}
-		return bufio.NewChunkWriter(NewChacha20Poly1305Writer(chunkWriter, key, nonce), MaxChunkSize)
+		return bufio.NewChunkWriter(NewChacha20Poly1305Writer(chunkWriter, key, nonce), WriteChunkSize)
 	default:
 		panic("unexpected security type")
 	}

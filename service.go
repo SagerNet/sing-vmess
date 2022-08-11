@@ -317,8 +317,7 @@ func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 	}
 	reader = CreateReader(reader, nil, requestBodyKey, requestBodyNonce, requestBodyKey, requestBodyNonce, security, option)
 	if option&RequestOptionChunkStream != 0 && command == CommandTCP {
-		readerBuffer := buf.New()
-		reader = bufio.NewBufferedReader(reader, readerBuffer)
+		reader = bufio.NewChunkReader(reader, ReadChunkSize)
 	}
 	rawConn := rawServerConn{
 		Conn:           conn,
@@ -405,6 +404,14 @@ func (c *rawServerConn) Close() error {
 		c.Conn,
 		c.reader,
 	)
+}
+
+func (c *rawServerConn) FrontHeadroom() int {
+	return MaxFrontHeadroom
+}
+
+func (c *rawServerConn) RearHeadroom() int {
+	return MaxRearHeadroom
 }
 
 func (c *rawServerConn) Upstream() any {

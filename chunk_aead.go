@@ -126,6 +126,10 @@ func (w *AEADWriter) WriteBuffer(buffer *buf.Buffer) error {
 	return w.upstream.WriteBuffer(buffer)
 }
 
-func (w *AEADWriter) Headroom() int {
+func (w *AEADWriter) RearHeadroom() int {
 	return CipherOverhead
+}
+
+func (w *AEADWriter) Upstream() any {
+	return w.upstream
 }

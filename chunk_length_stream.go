@@ -94,7 +94,7 @@ func (w *StreamChunkWriter) Write(p []byte) (n int, err error) {
 	if w.globalPadding != nil {
 		var hashCode uint16
 		common.Must(binary.Read(w.globalPadding, binary.BigEndian, &hashCode))
-		paddingLen = hashCode % 64
+		paddingLen = hashCode % MaxPaddingSize
 		dataLen += paddingLen
 	}
 	if w.chunkMasking != nil {
@@ -125,7 +125,7 @@ func (w *StreamChunkWriter) WriteBuffer(buffer *buf.Buffer) error {
 	if w.globalPadding != nil {
 		var hashCode uint16
 		common.Must(binary.Read(w.globalPadding, binary.BigEndian, &hashCode))
-		paddingLen = hashCode % 64
+		paddingLen = hashCode % MaxPaddingSize
 		dataLen += paddingLen
 	}
 	if w.chunkMasking != nil {
@@ -150,7 +150,7 @@ func (w *StreamChunkWriter) WriteWithChecksum(checksum uint32, p []byte) (n int,
 	if w.globalPadding != nil {
 		var hashCode uint16
 		common.Must(binary.Read(w.globalPadding, binary.BigEndian, &hashCode))
-		paddingLen = hashCode % 64
+		paddingLen = hashCode % MaxPaddingSize
 		dataLen += paddingLen
 	}
 	if w.chunkMasking != nil {
@@ -179,8 +179,16 @@ func (w *StreamChunkWriter) WriteWithChecksum(checksum uint32, p []byte) (n int,
 	return
 }
 
-func (w *StreamChunkWriter) Headroom() int {
+func (w *StreamChunkWriter) FrontHeadroom() int {
 	return 2
+}
+
+func (w *StreamChunkWriter) RearHeadroom() int {
+	if w.globalPadding != nil {
+		return MaxPaddingSize
+	} else {
+		return 0
+	}
 }
 
 func (w *StreamChunkWriter) Upstream() any {

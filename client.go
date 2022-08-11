@@ -104,7 +104,7 @@ type rawClientConn struct {
 	requestNonce   [16]byte
 	responseHeader byte
 
-	readBuffer *buf.Buffer
+	readBuffer bool
 	reader     N.ExtendedReader
 	writer     N.ExtendedWriter
 }
@@ -140,7 +140,7 @@ func (c *Client) dialRaw(upstream net.Conn, command byte, destination M.Socksadd
 	}
 
 	if option&RequestOptionChunkStream != 0 && command == CommandTCP {
-		conn.readBuffer = buf.New()
+		conn.readBuffer = true
 	}
 
 	conn.security = security
@@ -284,8 +284,8 @@ func (c *rawClientConn) readResponse() error {
 		}
 
 		reader := CreateReader(c.Conn, headerReader, c.requestKey[:], c.requestNonce[:], responseKey[:], responseIv[:], c.security, c.option)
-		if c.readBuffer != nil {
-			reader = bufio.NewBufferedReader(reader, c.readBuffer)
+		if c.readBuffer {
+			reader = bufio.NewChunkReader(reader, ReadChunkSize)
 		}
 		c.reader = bufio.NewExtendedReader(reader)
 	} else {
@@ -340,8 +340,8 @@ func (c *rawClientConn) readResponse() error {
 		headerBuffer.Truncate(int(headerLen))
 
 		reader := CreateReader(c.Conn, nil, c.requestKey[:], c.requestNonce[:], responseKey, responseNonce, c.security, c.option)
-		if c.readBuffer != nil {
-			reader = bufio.NewBufferedReader(reader, c.readBuffer)
+		if c.readBuffer {
+			reader = bufio.NewChunkReader(reader, ReadChunkSize)
 		}
 		c.reader = bufio.NewExtendedReader(reader)
 	}
@@ -353,6 +353,14 @@ func (c *rawClientConn) Close() error {
 		c.Conn,
 		c.reader,
 	)
+}
+
+func (c *rawClientConn) FrontHeadroom() int {
+	return MaxFrontHeadroom
+}
+
+func (c *rawClientConn) RearHeadroom() int {
+	return MaxRearHeadroom
 }
 
 func (c *rawClientConn) Upstream() any {

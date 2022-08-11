@@ -16,14 +16,14 @@ type PacketConn struct {
 	bindAddr M.Socksaddr
 }
 
-func NewClient(conn net.PacketConn, bindAddr M.Socksaddr) *PacketConn {
+func NewConn(conn net.PacketConn, bindAddr M.Socksaddr) *PacketConn {
 	return &PacketConn{
 		bufio.NewPacketConn(conn),
 		bindAddr,
 	}
 }
 
-func NewBindClient(conn net.Conn) *PacketConn {
+func NewBindConn(conn net.Conn) *PacketConn {
 	return &PacketConn{
 		bufio.NewUnbindPacketConn(conn),
 		M.Socksaddr{},
@@ -67,9 +67,13 @@ func (c *PacketConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksaddr, er
 
 func (c *PacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) error {
 	if destination.IsFqdn() {
-		return E.Extend(ErrFqdnUnpported, destination.Fqdn)
+		return E.Extend(ErrFqdnUnsupported, destination.Fqdn)
 	}
 	header := buf.With(buffer.Extend(AddressSerializer.AddrPortLen(destination)))
 	common.Must(AddressSerializer.WriteAddrPort(header, destination))
 	return c.NetPacketConn.WritePacket(buffer, c.bindAddr)
+}
+
+func (c *PacketConn) FrontHeadroom() int {
+	return M.MaxIPSocksaddrLength
 }

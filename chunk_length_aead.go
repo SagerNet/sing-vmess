@@ -122,7 +122,7 @@ func (w *AEADChunkWriter) Write(p []byte) (n int, err error) {
 	if w.globalPadding != nil {
 		var hashCode uint16
 		common.Must(binary.Read(w.globalPadding, binary.BigEndian, &hashCode))
-		paddingLen = hashCode % 64
+		paddingLen = hashCode % MaxPaddingSize
 		dataLength += paddingLen
 	}
 	dataLength -= CipherOverhead
@@ -163,7 +163,7 @@ func (w *AEADChunkWriter) WriteBuffer(buffer *buf.Buffer) error {
 	if w.globalPadding != nil {
 		var hashCode uint16
 		common.Must(binary.Read(w.globalPadding, binary.BigEndian, &hashCode))
-		paddingLen = hashCode % 64
+		paddingLen = hashCode % MaxPaddingSize
 		dataLength += paddingLen
 	}
 	dataLength -= CipherOverhead
@@ -182,8 +182,16 @@ func (w *AEADChunkWriter) WriteBuffer(buffer *buf.Buffer) error {
 	return w.upstream.WriteBuffer(buffer)
 }
 
-func (w *AEADChunkWriter) Headroom() int {
-	return 2 + CipherOverhead + 64
+func (w *AEADChunkWriter) FrontHeadroom() int {
+	return 2 + CipherOverhead
+}
+
+func (w *AEADChunkWriter) RearHeadroom() int {
+	if w.globalPadding != nil {
+		return CipherOverhead + MaxPaddingSize
+	} else {
+		return CipherOverhead
+	}
 }
 
 func (w *AEADChunkWriter) Upstream() any {
