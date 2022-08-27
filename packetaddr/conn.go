@@ -34,6 +34,15 @@ func (c *PacketConn) RemoteAddr() net.Addr {
 	return c.bindAddr
 }
 
+func (c *PacketConn) Read(b []byte) (n int, err error) {
+	n, _, err = c.ReadFrom(b)
+	return
+}
+
+func (c *PacketConn) Write(b []byte) (n int, err error) {
+	return c.WriteTo(b, c.RemoteAddr())
+}
+
 func (c *PacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 	buffer := buf.With(p)
 	var destination M.Socksaddr
@@ -69,11 +78,15 @@ func (c *PacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) er
 	if destination.IsFqdn() {
 		return E.Extend(ErrFqdnUnsupported, destination.Fqdn)
 	}
-	header := buf.With(buffer.Extend(AddressSerializer.AddrPortLen(destination)))
+	header := buf.With(buffer.ExtendHeader(AddressSerializer.AddrPortLen(destination)))
 	common.Must(AddressSerializer.WriteAddrPort(header, destination))
 	return c.NetPacketConn.WritePacket(buffer, c.bindAddr)
 }
 
 func (c *PacketConn) FrontHeadroom() int {
 	return M.MaxIPSocksaddrLength
+}
+
+func (c *PacketConn) Upstream() any {
+	return c.NetPacketConn
 }
