@@ -139,8 +139,30 @@ func GenerateChacha20Poly1305Key(b []byte) []byte {
 func CreateReader(upstream io.Reader, streamReader io.Reader, requestKey []byte, requestNonce []byte, key []byte, nonce []byte, security byte, option byte) io.Reader {
 	switch security {
 	case SecurityTypeNone:
+		var reader io.Reader
 		if option&RequestOptionChunkStream != 0 {
-			return NewStreamChunkReader(upstream, nil, nil)
+			var globalPadding sha3.ShakeHash
+			if option&RequestOptionGlobalPadding != 0 {
+				globalPadding = sha3.NewShake128()
+				common.Must1(globalPadding.Write(nonce))
+			}
+			if option&RequestOptionAuthenticatedLength != 0 {
+				reader = NewAes128GcmChunkReader(upstream, requestKey, requestNonce, globalPadding)
+			} else {
+				var chunkMasking sha3.ShakeHash
+				if option&RequestOptionChunkMasking != 0 {
+					if globalPadding != nil {
+						chunkMasking = globalPadding
+					} else {
+						chunkMasking = sha3.NewShake128()
+						common.Must1(chunkMasking.Write(nonce))
+					}
+				}
+				reader = NewStreamChunkReader(upstream, chunkMasking, globalPadding)
+			}
+		}
+		if reader != nil {
+			return reader
 		} else {
 			return upstream
 		}
@@ -218,8 +240,30 @@ func CreateReader(upstream io.Reader, streamReader io.Reader, requestKey []byte,
 func CreateWriter(upstream io.Writer, streamWriter io.Writer, requestKey []byte, requestNonce []byte, key []byte, nonce []byte, security byte, option byte) io.Writer {
 	switch security {
 	case SecurityTypeNone:
+		var writer io.Writer
 		if option&RequestOptionChunkStream != 0 {
-			return bufio.NewChunkWriter(NewStreamChunkWriter(upstream, nil, nil), WriteChunkSize)
+			var globalPadding sha3.ShakeHash
+			if option&RequestOptionGlobalPadding != 0 {
+				globalPadding = sha3.NewShake128()
+				common.Must1(globalPadding.Write(nonce))
+			}
+			if option&RequestOptionAuthenticatedLength != 0 {
+				writer = NewAes128GcmChunkWriter(upstream, requestKey, requestNonce, globalPadding)
+			} else {
+				var chunkMasking sha3.ShakeHash
+				if option&RequestOptionChunkMasking != 0 {
+					if globalPadding != nil {
+						chunkMasking = globalPadding
+					} else {
+						chunkMasking = sha3.NewShake128()
+						common.Must1(chunkMasking.Write(nonce))
+					}
+				}
+				writer = NewStreamChunkWriter(upstream, chunkMasking, globalPadding)
+			}
+		}
+		if writer != nil {
+			return writer
 		} else {
 			return upstream
 		}
