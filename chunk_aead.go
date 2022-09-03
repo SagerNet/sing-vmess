@@ -96,13 +96,7 @@ func NewChacha20Poly1305Writer(upstream io.Writer, key []byte, nonce []byte) *AE
 
 func (w *AEADWriter) Write(p []byte) (n int, err error) {
 	// TODO: fix stack buffer
-	buffer := buf.New()
-	_, err = buffer.Write(p)
-	if err != nil {
-		buffer.Release()
-		return
-	}
-	return bufio.Write(w, buffer)
+	return bufio.WriteBuffer(w, buf.As(p))
 	/*_buffer := buf.StackNewSize(len(p) + CipherOverhead)
 	defer common.KeepAlive(_buffer)
 	buffer := common.Dup(_buffer)
