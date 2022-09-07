@@ -66,8 +66,12 @@ func (r *AEADChunkReader) Read(p []byte) (n int, err error) {
 		paddingLen = int(hashCode % 64)
 		dataLen -= paddingLen
 	}
-	if dataLen <= 0 {
+	if dataLen < 0 {
 		err = E.Extend(ErrBadLengthChunk, "length=", length, ", padding=", paddingLen)
+		return
+	}
+	if dataLen == 0 {
+		err = io.EOF
 		return
 	}
 	var readLen int
