@@ -45,7 +45,7 @@ func NewChacha20Poly1305ChunkReader(upstream io.Reader, key []byte, nonce []byte
 
 func (r *AEADChunkReader) Read(p []byte) (n int, err error) {
 	if cap(p) < 2+CipherOverhead {
-		return 0, io.ErrShortBuffer
+		return 0, E.Extend(io.ErrShortBuffer, "AEAD chunk need ", 2+CipherOverhead)
 	}
 	_, err = io.ReadFull(r.upstream, p[:2+CipherOverhead])
 	if err != nil {
@@ -80,7 +80,7 @@ func (r *AEADChunkReader) Read(p []byte) (n int, err error) {
 	if readLen > dataLen {
 		readLen = dataLen
 	} else if readLen < dataLen {
-		return 0, io.ErrShortBuffer
+		return 0, E.Extend(io.ErrShortBuffer, "AEAD chunk need ", dataLen)
 	}
 	n, err = io.ReadFull(r.upstream, p[:readLen])
 	if err != nil {

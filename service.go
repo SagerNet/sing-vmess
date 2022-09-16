@@ -34,6 +34,7 @@ var _ N.TCPConnectionHandler = (*Service[string])(nil)
 type Handler interface {
 	N.TCPConnectionHandler
 	N.UDPConnectionHandler
+	E.Handler
 }
 
 var (
@@ -292,16 +293,20 @@ func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 	paddingLen := int(headerBuffer[35] >> 4)
 	security := headerBuffer[35] & 0x0F
 	command := headerBuffer[37]
-	if command == CommandMux {
-		return E.New("mux unsupported")
-	} else if command == CommandUDP && option == 0 {
+	switch command {
+	case CommandTCP, CommandUDP, CommandMux:
+	default:
+		return E.New("unknown command: ", command)
+	}
+	if command == CommandUDP && option == 0 {
 		return E.New("bad packet connection")
 	}
-	destination, err := AddressSerializer.ReadAddrPort(headerReader)
-	if err != nil {
-		return err
+	if command != CommandMux {
+		metadata.Destination, err = AddressSerializer.ReadAddrPort(headerReader)
+		if err != nil {
+			return err
+		}
 	}
-	metadata.Destination = destination
 	if paddingLen > 0 {
 		_, err = io.CopyN(io.Discard, headerReader, int64(paddingLen))
 		if err != nil {
@@ -316,7 +321,7 @@ func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 		reader = bufio.NewCachedReader(reader, requestBuffer)
 	}
 	reader = CreateReader(reader, nil, requestBodyKey, requestBodyNonce, requestBodyKey, requestBodyNonce, security, option)
-	if option&RequestOptionChunkStream != 0 && command == CommandTCP {
+	if option&RequestOptionChunkStream != 0 && command == CommandTCP || command == CommandMux {
 		reader = bufio.NewChunkReader(reader, ReadChunkSize)
 	}
 	rawConn := rawServerConn{
@@ -330,10 +335,15 @@ func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 		reader:         bufio.NewExtendedReader(reader),
 	}
 
-	if command == CommandTCP {
+	switch command {
+	case CommandTCP:
 		return s.handler.NewConnection(ctx, &serverConn{rawConn}, metadata)
-	} else {
-		return s.handler.NewPacketConnection(ctx, &serverPacketConn{rawConn, destination}, metadata)
+	case CommandUDP:
+		return s.handler.NewPacketConnection(ctx, &serverPacketConn{rawConn, metadata.Destination}, metadata)
+	case CommandMux:
+		return HandleMuxConnection(ctx, &serverConn{rawConn}, s.handler)
+	default:
+		return E.New("unknown command: ", command)
 	}
 }
 

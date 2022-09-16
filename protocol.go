@@ -73,6 +73,22 @@ const (
 	CipherOverhead = 16
 )
 
+const (
+	StatusNew       = 1
+	StatusKeep      = 2
+	StatusEnd       = 3
+	StatusKeepAlive = 4
+	OptionData      = 1
+	OptionError     = 2
+	NetworkTCP      = 1
+	NetworkUDP      = 2
+)
+
+var MuxDestination = M.Socksaddr{
+	Fqdn: "v1.mux.cool",
+	Port: 666,
+}
+
 type TimeFunc = func() time.Time
 
 var (

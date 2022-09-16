@@ -6,11 +6,16 @@ Some confusing protocol.
 
 100% compatible with `v2ray-core`.
 
-- [x] Stream length chunk with padding and masking
-- [x] AEAD length chunk with padding
-- [x] Stream chunk
-- [x] AEAD Chunk
-- [x] Legacy client
-- [x] AEAD Client
-- [x] Legacy server
-- [x] AEAD Server
+* Stream length chunk with padding and masking
+* AEAD length chunk with padding
+* Stream chunk
+* AEAD chunk
+* Legacy client
+* AEAD client
+* Legacy server
+* AEAD server
+
+Extra features:
+
+* Mux server
+* XUDP client

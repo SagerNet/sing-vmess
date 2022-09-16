@@ -92,6 +92,19 @@ func (c *Client) DialEarlyPacketConn(upstream net.Conn, destination M.Socksaddr)
 	return &clientPacketConn{clientConn{c.dialRaw(upstream, CommandUDP, destination)}, destination}
 }
 
+func (c *Client) DialXUDPPacketConn(upstream net.Conn, destination M.Socksaddr) (PacketConn, error) {
+	conn := &clientConn{c.dialRaw(upstream, CommandMux, destination)}
+	err := conn.writeHandshake()
+	if err != nil {
+		return nil, err
+	}
+	return NewXUDPConn(conn, destination), nil
+}
+
+func (c *Client) DialEarlyXUDPPacketConn(upstream net.Conn, destination M.Socksaddr) PacketConn {
+	return NewXUDPConn(&clientConn{c.dialRaw(upstream, CommandMux, destination)}, destination)
+}
+
 type rawClientConn struct {
 	*Client
 	net.Conn
@@ -139,7 +152,7 @@ func (c *Client) dialRaw(upstream net.Conn, command byte, destination M.Socksadd
 		}
 	}
 
-	if option&RequestOptionChunkStream != 0 && command == CommandTCP {
+	if option&RequestOptionChunkStream != 0 && command == CommandTCP || command == CommandMux {
 		conn.readBuffer = true
 	}
 

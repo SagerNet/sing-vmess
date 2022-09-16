@@ -65,7 +65,7 @@ func (r *StreamChunkReader) Read(p []byte) (n int, err error) {
 	if readLen > dataLen {
 		readLen = dataLen
 	} else if readLen < dataLen {
-		return 0, io.ErrShortBuffer
+		return 0, E.Extend(io.ErrShortBuffer, "stream chunk need ", dataLen)
 	}
 	n, err = io.ReadFull(r.upstream, p[:readLen])
 	if err != nil {
