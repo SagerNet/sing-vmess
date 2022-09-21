@@ -4,16 +4,18 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
-	"os"
 
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/buf"
+	"github.com/sagernet/sing/common/bufio"
 	E "github.com/sagernet/sing/common/exceptions"
 	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
 )
 
 type XUDPConn struct {
 	net.Conn
+	writer         N.ExtendedWriter
 	destination    M.Socksaddr
 	requestWritten bool
 }
@@ -21,12 +23,21 @@ type XUDPConn struct {
 func NewXUDPConn(conn net.Conn, destination M.Socksaddr) *XUDPConn {
 	return &XUDPConn{
 		Conn:        conn,
+		writer:      bufio.NewExtendedWriter(conn),
 		destination: destination,
 	}
 }
 
 func (c *XUDPConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
-	return 0, nil, os.ErrInvalid
+	buffer := buf.With(p)
+	var destination M.Socksaddr
+	destination, err = c.ReadPacket(buffer)
+	if err != nil {
+		return
+	}
+	addr = destination.UDPAddr()
+	n = buffer.Len()
+	return
 }
 
 func (c *XUDPConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksaddr, err error) {
@@ -45,11 +56,9 @@ func (c *XUDPConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksaddr, err 
 		return
 	}
 	switch header[2] {
-	case 1:
-		// frame new
+	case StatusNew:
 		return M.Socksaddr{}, E.New("unexpected frame new")
-	case 2:
-		// frame keep
+	case StatusKeep:
 		if length != 4 {
 			_, err = buffer.ReadFullFrom(c.Conn, int(length)-2)
 			if err != nil {
@@ -67,11 +76,9 @@ func (c *XUDPConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksaddr, err 
 			}
 			destination = c.destination
 		}
-	case 3:
-		// frame end
+	case StatusEnd:
 		return M.Socksaddr{}, io.EOF
-	case 4:
-		// frame keep alive
+	case StatusKeepAlive:
 	default:
 		return M.Socksaddr{}, E.New("unexpected frame: ", buffer.Byte(2))
 	}
@@ -95,16 +102,7 @@ func (c *XUDPConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksaddr, err 
 }
 
 func (c *XUDPConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
-	destination := M.SocksaddrFromNet(addr)
-	headerLen := c.frontHeadroom(AddressSerializer.AddrPortLen(destination))
-	buffer := buf.NewSize(headerLen + len(p))
-	buffer.Advance(headerLen)
-	common.Must1(buffer.Write(p))
-	err = c.WritePacket(buffer, destination)
-	if err == nil {
-		n = len(p)
-	}
-	return
+	return bufio.WritePacketBuffer(c, buf.As(p), M.SocksaddrFromNet(addr))
 }
 
 func (c *XUDPConn) frontHeadroom(addrLen int) int {
@@ -121,7 +119,6 @@ func (c *XUDPConn) frontHeadroom(addrLen int) int {
 }
 
 func (c *XUDPConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) error {
-	defer buffer.Release()
 	dataLen := buffer.Len()
 	addrLen := M.SocksaddrSerializer.AddrPortLen(destination)
 	if !c.requestWritten {
@@ -151,7 +148,7 @@ func (c *XUDPConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) erro
 		}
 		binary.BigEndian.PutUint16(header[7+addrLen:], uint16(dataLen))
 	}
-	return common.Error(c.Conn.Write(buffer.Bytes()))
+	return c.writer.WriteBuffer(buffer)
 }
 
 func (c *XUDPConn) FrontHeadroom() int {

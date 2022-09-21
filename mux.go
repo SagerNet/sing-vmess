@@ -13,17 +13,20 @@ import (
 
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/buf"
+	"github.com/sagernet/sing/common/bufio"
 	E "github.com/sagernet/sing/common/exceptions"
 	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
 )
 
 func HandleMuxConnection(ctx context.Context, conn net.Conn, handler Handler) error {
 	session := &serverSession{
-		ctx:     ctx,
-		conn:    conn,
-		handler: handler,
-		streams: make(map[uint16]*serverStream),
-		writer:  std_bufio.NewWriter(conn),
+		ctx:          ctx,
+		conn:         conn,
+		directWriter: bufio.NewExtendedWriter(conn),
+		handler:      handler,
+		streams:      make(map[uint16]*serverStream),
+		writer:       std_bufio.NewWriter(conn),
 	}
 	return session.recvLoop()
 }
@@ -31,6 +34,7 @@ func HandleMuxConnection(ctx context.Context, conn net.Conn, handler Handler) er
 type serverSession struct {
 	ctx          context.Context
 	conn         net.Conn
+	directWriter N.ExtendedWriter
 	handler      Handler
 	streamAccess sync.RWMutex
 	streams      map[uint16]*serverStream
@@ -389,7 +393,7 @@ func (c *serverMuxConn) WriteBuffer(buffer *buf.Buffer) error {
 		binary.Write(header, binary.BigEndian, uint8(OptionData)),
 		binary.Write(header, binary.BigEndian, uint16(dataLen)),
 	)
-	return common.Error(c.session.conn.Write(buffer.Bytes()))
+	return c.session.directWriter.WriteBuffer(buffer)
 }
 
 func (c *serverMuxConn) FrontHeadroom() int {
@@ -474,7 +478,7 @@ func (c *serverMuxPacketConn) WritePacket(buffer *buf.Buffer, destination M.Sock
 		AddressSerializer.WriteAddrPort(header, destination),
 		binary.Write(header, binary.BigEndian, uint16(dataLen)),
 	)
-	return common.Error(c.session.conn.Write(buffer.Bytes()))
+	return c.session.directWriter.WriteBuffer(buffer)
 }
 
 func (c *serverMuxPacketConn) FrontHeadroom() int {
