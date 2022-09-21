@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
-	"os"
 
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/buf"
@@ -26,7 +25,15 @@ func NewXUDPConn(conn net.Conn, destination M.Socksaddr) *XUDPConn {
 }
 
 func (c *XUDPConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
-	return 0, nil, os.ErrInvalid
+	buffer := buf.With(p)
+	var destination M.Socksaddr
+	destination, err = c.ReadPacket(buffer)
+	if err != nil {
+		return
+	}
+	addr = destination.UDPAddr()
+	n = buffer.Len()
+	return
 }
 
 func (c *XUDPConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksaddr, err error) {
