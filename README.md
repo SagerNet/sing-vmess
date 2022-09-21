@@ -19,3 +19,4 @@ Extra features:
 
 * Mux server
 * XUDP client
+* VLESS client
