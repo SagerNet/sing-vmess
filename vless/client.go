@@ -149,6 +149,10 @@ func (c *PacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) er
 
 func (c *PacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 	n, err = c.Read(p)
+	if err != nil {
+		return
+	}
+	addr = c.destination.UDPAddr()
 	return
 }
 
