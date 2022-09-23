@@ -28,6 +28,12 @@ func HandleMuxConnection(ctx context.Context, conn net.Conn, handler Handler) er
 		streams:      make(map[uint16]*serverStream),
 		writer:       std_bufio.NewWriter(conn),
 	}
+	if ctx.Done() != nil {
+		go func() {
+			<-ctx.Done()
+			session.cleanup(ctx.Err())
+		}()
+	}
 	return session.recvLoop()
 }
 
@@ -53,16 +59,25 @@ func (c *serverSession) recvLoop() error {
 	for {
 		err := c.recv()
 		if err != nil {
-			return err
+			c.cleanup(err)
+			return E.Cause(err, "mux connection closed")
 		}
 	}
+}
+
+func (c *serverSession) cleanup(err error) {
+	c.streamAccess.Lock()
+	for _, stream := range c.streams {
+		_ = stream.pipe.CloseWithError(err)
+	}
+	c.streamAccess.Unlock()
 }
 
 func (c *serverSession) recv() error {
 	var length uint16
 	err := binary.Read(c.conn, binary.BigEndian, &length)
 	if err != nil {
-		return err
+		return E.Cause(err, "read frame header")
 	}
 
 	var sessionID uint16
@@ -400,6 +415,10 @@ func (c *serverMuxConn) FrontHeadroom() int {
 	return 8
 }
 
+func (c *serverMuxConn) UpstreamWriter() any {
+	return c.session.directWriter
+}
+
 func (c *serverMuxConn) Close() error {
 	return c.session.close(c.sessionID, nil)
 }
@@ -483,6 +502,10 @@ func (c *serverMuxPacketConn) WritePacket(buffer *buf.Buffer, destination M.Sock
 
 func (c *serverMuxPacketConn) FrontHeadroom() int {
 	return 9 + M.MaxSocksaddrLength
+}
+
+func (c *serverMuxPacketConn) UpstreamWriter() any {
+	return c.session.directWriter
 }
 
 func (c *serverMuxPacketConn) Close() error {
