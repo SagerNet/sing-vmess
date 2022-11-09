@@ -174,9 +174,7 @@ func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 	const headerLenBufferLen = 2 + CipherOverhead
 	const minHeaderLen = 16 + headerLenBufferLen + 8 + CipherOverhead + 42
 
-	_requestBuffer := buf.StackNew()
-	defer common.KeepAlive(_requestBuffer)
-	requestBuffer := common.Dup(_requestBuffer)
+	requestBuffer := buf.New()
 	defer requestBuffer.Release()
 	n, err := requestBuffer.ReadOnceFrom(conn)
 	if err != nil {
