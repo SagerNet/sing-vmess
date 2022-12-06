@@ -473,7 +473,7 @@ func (c *serverConn) ReadFrom(r io.Reader) (n int64, err error) {
 	return bufio.Copy(c.writer, r)
 }
 
-var _ N.NetPacketConn = (*serverPacketConn)(nil)
+var _ PacketConn = (*serverPacketConn)(nil)
 
 type serverPacketConn struct {
 	rawServerConn

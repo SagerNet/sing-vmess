@@ -150,6 +150,7 @@ func (c *serverSession) recv() error {
 					sessionID,
 					pipeIn,
 					c,
+					destination,
 				}, M.Metadata{
 					Destination: destination,
 				})
@@ -443,10 +444,26 @@ func (c *serverMuxConn) SetWriteDeadline(t time.Time) error {
 	return os.ErrInvalid
 }
 
+var _ PacketConn = (*serverMuxPacketConn)(nil)
+
 type serverMuxPacketConn struct {
-	sessionID uint16
-	pipe      *io.PipeReader
-	session   *serverSession
+	sessionID   uint16
+	pipe        *io.PipeReader
+	session     *serverSession
+	destination M.Socksaddr
+}
+
+func (c *serverMuxPacketConn) Read(b []byte) (n int, err error) {
+	n, _, err = c.ReadFrom(b)
+	return
+}
+
+func (c *serverMuxPacketConn) Write(b []byte) (n int, err error) {
+	return c.WriteTo(b, c.destination)
+}
+
+func (c *serverMuxPacketConn) RemoteAddr() net.Addr {
+	return c.destination.UDPAddr()
 }
 
 func (c *serverMuxPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
