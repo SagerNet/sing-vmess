@@ -71,7 +71,7 @@ func NewClient(userId string, security string, alterId int, options ...ClientOpt
 
 func (c *Client) DialConn(upstream net.Conn, destination M.Socksaddr) (N.ExtendedConn, error) {
 	conn := &clientConn{c.dialRaw(upstream, CommandTCP, destination)}
-	return conn, conn.writeHandshake()
+	return conn, conn.writeHandshake(nil)
 }
 
 func (c *Client) DialEarlyConn(upstream net.Conn, destination M.Socksaddr) N.ExtendedConn {
@@ -85,7 +85,7 @@ type PacketConn interface {
 
 func (c *Client) DialPacketConn(upstream net.Conn, destination M.Socksaddr) (PacketConn, error) {
 	conn := &clientPacketConn{clientConn{c.dialRaw(upstream, CommandUDP, destination)}, destination}
-	return conn, conn.writeHandshake()
+	return conn, conn.writeHandshake(nil)
 }
 
 func (c *Client) DialEarlyPacketConn(upstream net.Conn, destination M.Socksaddr) PacketConn {
@@ -94,7 +94,7 @@ func (c *Client) DialEarlyPacketConn(upstream net.Conn, destination M.Socksaddr)
 
 func (c *Client) DialXUDPPacketConn(upstream net.Conn, destination M.Socksaddr) (PacketConn, error) {
 	conn := &clientConn{c.dialRaw(upstream, CommandMux, destination)}
-	err := conn.writeHandshake()
+	err := conn.writeHandshake(nil)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +161,7 @@ func (c *Client) dialRaw(upstream net.Conn, command byte, destination M.Socksadd
 	return conn
 }
 
-func (c *rawClientConn) writeHandshake() error {
+func (c *rawClientConn) writeHandshake(payload []byte) error {
 	paddingLen := mRand.Intn(16)
 
 	var headerLen int
@@ -204,11 +204,31 @@ func (c *rawClientConn) writeHandshake() error {
 		common.Must(binary.Write(timeHash, binary.BigEndian, timestamp))
 		newAesStream(c.key[:], timeHash.Sum(nil), cipher.NewCFBEncrypter).XORKeyStream(headerBuffer.Bytes(), headerBuffer.Bytes())
 
-		_, err := c.Conn.Write(requestBuffer.Bytes())
+		var writer io.Writer
+		var bufferedWriter *bufio.BufferedWriter
+		var err error
+		if len(payload) > 0 {
+			bufferedWriter = bufio.NewBufferedWriter(c.Conn, buf.New())
+			_, err = bufferedWriter.Write(requestBuffer.Bytes())
+			writer = bufferedWriter
+		} else {
+			writer = c.Conn
+			_, err = c.Conn.Write(requestBuffer.Bytes())
+		}
 		if err != nil {
 			return err
 		}
-		c.writer = bufio.NewExtendedWriter(CreateWriter(c.Conn, nil, c.requestKey[:], c.requestNonce[:], c.requestKey[:], c.requestNonce[:], c.security, c.option))
+		c.writer = bufio.NewExtendedWriter(CreateWriter(writer, nil, c.requestKey[:], c.requestNonce[:], c.requestKey[:], c.requestNonce[:], c.security, c.option))
+		if len(payload) > 0 {
+			_, err = c.writer.Write(payload)
+			if err != nil {
+				return err
+			}
+			err = bufferedWriter.Fallthrough()
+			if err != nil {
+				return err
+			}
+		}
 	} else {
 		const headerLenBufferLen = 2 + CipherOverhead
 
@@ -240,11 +260,29 @@ func (c *rawClientConn) writeHandshake() error {
 		headerNonce := KDF(c.key[:], KDFSaltConstVMessHeaderPayloadAEADIV, authId, connectionNonce)[:12]
 		newAesGcm(headerKey).Seal(headerBuffer.Index(0), headerNonce, headerBuffer.Bytes(), authId)
 
-		_, err := c.Conn.Write(requestBuffer.Bytes())
+		var writer io.Writer
+		var bufferedWriter *bufio.BufferedWriter
+		if len(payload) > 0 {
+			bufferedWriter = bufio.NewBufferedWriter(c.Conn, buf.New())
+			writer = bufferedWriter
+		} else {
+			writer = c.Conn
+		}
+		_, err := writer.Write(requestBuffer.Bytes())
 		if err != nil {
 			return err
 		}
-		c.writer = bufio.NewExtendedWriter(CreateWriter(c.Conn, nil, c.requestKey[:], c.requestNonce[:], c.requestKey[:], c.requestNonce[:], c.security, c.option))
+		c.writer = bufio.NewExtendedWriter(CreateWriter(writer, nil, c.requestKey[:], c.requestNonce[:], c.requestKey[:], c.requestNonce[:], c.security, c.option))
+		if len(payload) > 0 {
+			_, err = c.writer.Write(payload)
+			if err != nil {
+				return err
+			}
+			err = bufferedWriter.Fallthrough()
+			if err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -396,10 +434,11 @@ func (c *clientConn) Read(p []byte) (n int, err error) {
 
 func (c *clientConn) Write(p []byte) (n int, err error) {
 	if c.writer == nil {
-		err = c.writeHandshake()
-		if err != nil {
-			return
+		err = c.writeHandshake(p)
+		if err == nil {
+			n = len(p)
 		}
+		return
 	}
 	return c.writer.Write(p)
 }
@@ -416,24 +455,20 @@ func (c *clientConn) ReadBuffer(buffer *buf.Buffer) error {
 
 func (c *clientConn) WriteBuffer(buffer *buf.Buffer) error {
 	if c.writer == nil {
-		err := c.writeHandshake()
-		if err != nil {
-			buffer.Release()
-			return err
-		}
+		return c.writeHandshake(buffer.Bytes())
 	}
 	return c.writer.WriteBuffer(buffer)
 }
 
-func (c *clientConn) ReadFrom(r io.Reader) (n int64, err error) {
+/*func (c *clientConn) ReadFrom(r io.Reader) (n int64, err error) {
 	if c.writer == nil {
-		err = c.writeHandshake()
+		err = c.writeHandshake(nil)
 		if err != nil {
 			return
 		}
 	}
 	return bufio.Copy(c.writer, r)
-}
+}*/
 
 func (c *clientConn) WriteTo(w io.Writer) (n int64, err error) {
 	if c.reader == nil {
@@ -467,7 +502,7 @@ func (c *clientPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) 
 
 func (c *clientPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	if c.writer == nil {
-		err = c.writeHandshake()
+		err = c.writeHandshake(nil)
 		if err != nil {
 			return
 		}
@@ -492,7 +527,7 @@ func (c *clientPacketConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksad
 
 func (c *clientPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) error {
 	if c.writer == nil {
-		err := c.writeHandshake()
+		err := c.writeHandshake(nil)
 		if err != nil {
 			buffer.Release()
 			return err

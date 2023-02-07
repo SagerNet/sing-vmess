@@ -1,8 +1,8 @@
 github.com/gofrs/uuid v4.3.1+incompatible h1:0/KbAdpx3UXAx1kEOWHJeOkpbgRFGHVgv+CFIY7dBJI=
 github.com/gofrs/uuid v4.3.1+incompatible/go.mod h1:b2aQJv3Z4Fp6yNu3cdSllBxTCLRxnplIgP/c0N/04lM=
-github.com/sagernet/sing v0.1.0 h1:FGmaP2BVPYO2IyC/3R1DaQa/zr+kOKHRgWqrmOF+Gu8=
-github.com/sagernet/sing v0.1.0/go.mod h1:zvgDYKI+vCAW9RyfyrKTgleI+DOa8lzHMPC7VZo3OL4=
+github.com/sagernet/sing v0.1.7-0.20230207063819-27d2950cdbe9 h1:qnXh4RjHsNjdZXkfbqwVqAzYUfc160gfkS5gepmsA+A=
+github.com/sagernet/sing v0.1.7-0.20230207063819-27d2950cdbe9/go.mod h1:JLSXsPTGRJFo/3X7EcAOCUgJH2/gAoxSJgBsnCZRp/w=
 golang.org/x/crypto v0.3.0 h1:a06MkbcxBrEFc0w0QIZWXrH/9cCX6KJyWbBOIwAn+7A=
 golang.org/x/crypto v0.3.0/go.mod h1:hebNnKkNXi2UzZN1eVRvBB7co0a+JxK6XbPiWVs/3J4=
-golang.org/x/sys v0.2.0 h1:ljd4t30dBnAvMZaQCevtY0xLLD0A+bRZXbgLMLU1F/A=
-golang.org/x/sys v0.2.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+golang.org/x/sys v0.4.0 h1:Zr2JFtRQNX3BCZ8YtxRE9hNJYC8J6I1MVbMg6owUp18=
+golang.org/x/sys v0.4.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
