@@ -7,3 +7,9 @@ func ServiceWithTimeFunc(timeFunc TimeFunc) ServiceOption {
 		service.time = timeFunc
 	}
 }
+
+func ServiceWithDisableHeaderProtection() ServiceOption {
+	return func(service *Service[string]) {
+		service.disableHeaderProtect = true
+	}
+}

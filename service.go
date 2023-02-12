@@ -46,16 +46,17 @@ var (
 )
 
 type Service[U comparable] struct {
-	userKey           map[U][16]byte
-	userIdCipher      map[U]cipher.Block
-	replayFilter      replay.Filter
-	handler           Handler
-	time              func() time.Time
-	alterIds          map[U][][16]byte
-	alterIdUpdateTime map[U]int64
-	alterIdMap        map[[16]byte]legacyUserEntry[U]
-	alterIdUpdateTask *time.Ticker
-	alterIdUpdateDone chan struct{}
+	userKey              map[U][16]byte
+	userIdCipher         map[U]cipher.Block
+	replayFilter         replay.Filter
+	handler              Handler
+	time                 func() time.Time
+	disableHeaderProtect bool
+	alterIds             map[U][][16]byte
+	alterIdUpdateTime    map[U]int64
+	alterIdMap           map[[16]byte]legacyUserEntry[U]
+	alterIdUpdateTask    *time.Ticker
+	alterIdUpdateDone    chan struct{}
 }
 
 type legacyUserEntry[U comparable] struct {
@@ -176,9 +177,20 @@ func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 
 	requestBuffer := buf.New()
 	defer requestBuffer.Release()
-	n, err := requestBuffer.ReadOnceFrom(conn)
-	if err != nil {
-		return err
+
+	if !s.disableHeaderProtect {
+		n, err := requestBuffer.ReadOnceFrom(conn)
+		if err != nil {
+			return err
+		}
+		if n < minHeaderLen {
+			return ErrBadHeader
+		}
+	} else {
+		_, err := requestBuffer.ReadAtLeastFrom(conn, minHeaderLen)
+		if err != nil {
+			return err
+		}
 	}
 
 	authId := requestBuffer.To(16)
@@ -194,9 +206,6 @@ func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 		}
 		if math.Abs(math.Abs(float64(timestamp))-float64(time.Now().Unix())) > 120 {
 			return ErrBadTimestamp
-		}
-		if n < minHeaderLen {
-			return ErrBadHeader
 		}
 		if !s.replayFilter.Check(decodedId[:]) {
 			return ErrReplay
@@ -227,6 +236,7 @@ func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 	var headerBuffer []byte
 
 	var reader io.Reader
+	var err error
 	if legacyProtocol {
 		requestBuffer.Advance(16)
 		reader = io.MultiReader(bytes.NewReader(requestBuffer.Bytes()), conn)
