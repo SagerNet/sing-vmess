@@ -436,6 +436,10 @@ func (c *rawServerConn) Upstream() any {
 	return c.Conn
 }
 
+func (c *rawServerConn) NeedHandshake() bool {
+	return c.writer == nil
+}
+
 type serverConn struct {
 	rawServerConn
 }
