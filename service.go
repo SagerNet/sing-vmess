@@ -27,7 +27,7 @@ import (
 	"github.com/sagernet/sing/common/replay"
 	"github.com/sagernet/sing/common/rw"
 
-	"github.com/gofrs/uuid"
+	"github.com/gofrs/uuid/v5"
 )
 
 var _ N.TCPConnectionHandler = (*Service[string])(nil)
