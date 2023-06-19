@@ -4,7 +4,7 @@ go 1.18
 
 require (
 	github.com/gofrs/uuid/v5 v5.0.0
-	github.com/sagernet/sing v0.2.5
+	github.com/sagernet/sing v0.2.6
 	golang.org/x/crypto v0.10.0
 )
 
