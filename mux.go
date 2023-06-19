@@ -498,6 +498,9 @@ func (c *serverMuxPacketConn) ReadPacket(buffer *buf.Buffer) (destination M.Sock
 	_, err = buffer.ReadFullFrom(c.pipe, int(length))
 	if err == nil {
 		destination, err = AddressSerializer.ReadAddrPort(c.pipe)
+		if err == nil {
+			destination = destination.Unwrap()
+		}
 	}
 	return
 }

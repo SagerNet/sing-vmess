@@ -75,7 +75,11 @@ func (c *PacketConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksaddr, er
 	if err != nil {
 		return
 	}
-	return AddressSerializer.ReadAddrPort(buffer)
+	destination, err = AddressSerializer.ReadAddrPort(buffer)
+	if err != nil {
+		return
+	}
+	return destination.Unwrap(), nil
 }
 
 func (c *PacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) error {

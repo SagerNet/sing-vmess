@@ -82,6 +82,7 @@ func (c *XUDPConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksaddr, err 
 			if err != nil {
 				return
 			}
+			destination = destination.Unwrap()
 		} else {
 			_, err = buffer.ReadFullFrom(c.Conn, 2)
 			if err != nil {
