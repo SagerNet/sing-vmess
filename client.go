@@ -188,9 +188,7 @@ func (c *rawClientConn) writeHandshake(payload []byte) error {
 		requestLen += 16 // alter id
 		requestLen += headerLen
 
-		_requestBuffer := buf.StackNewSize(requestLen)
-		defer common.KeepAlive(_requestBuffer)
-		requestBuffer := common.Dup(_requestBuffer)
+		requestBuffer := buf.NewSize(requestLen)
 		defer requestBuffer.Release()
 
 		timestamp := uint64(c.time().Unix())
@@ -242,9 +240,7 @@ func (c *rawClientConn) writeHandshake(payload []byte) error {
 		requestLen += 8 // connection nonce
 		requestLen += headerLen + CipherOverhead
 
-		_requestBuffer := buf.StackNewSize(requestLen)
-		defer common.KeepAlive(_requestBuffer)
-		requestBuffer := common.Dup(_requestBuffer)
+		requestBuffer := buf.NewSize(requestLen)
 		defer requestBuffer.Release()
 
 		AuthID(c.key, c.time(), requestBuffer)
@@ -318,9 +314,7 @@ func (c *rawClientConn) readResponse() error {
 		responseIv := md5.Sum(c.requestNonce[:])
 
 		headerReader := NewStreamReader(c.Conn, responseKey[:], responseIv[:])
-		_response := buf.StackNewSize(4)
-		defer common.KeepAlive(_response)
-		response := common.Dup(_response)
+		response := buf.NewSize(4)
 		defer response.Release()
 		_, err := response.ReadFullFrom(headerReader, response.FreeLen())
 		if err != nil {
@@ -353,9 +347,7 @@ func (c *rawClientConn) readResponse() error {
 		headerLenNonce := KDF(responseNonce, KDFSaltConstAEADRespHeaderLenIV)[:12]
 		headerLenCipher := newAesGcm(headerLenKey)
 
-		_headerLenBuffer := buf.StackNewSize(2 + CipherOverhead)
-		defer common.KeepAlive(_headerLenBuffer)
-		headerLenBuffer := common.Dup(_headerLenBuffer)
+		headerLenBuffer := buf.NewSize(2 + CipherOverhead)
 		defer headerLenBuffer.Release()
 
 		_, err := headerLenBuffer.ReadFullFrom(c.Conn, headerLenBuffer.FreeLen())
@@ -378,9 +370,7 @@ func (c *rawClientConn) readResponse() error {
 		headerNonce := KDF(responseNonce, KDFSaltConstAEADRespHeaderPayloadIV)[:12]
 		headerCipher := newAesGcm(headerKey)
 
-		_headerBuffer := buf.StackNewSize(int(headerLen) + CipherOverhead)
-		defer common.KeepAlive(_headerBuffer)
-		headerBuffer := common.Dup(_headerBuffer)
+		headerBuffer := buf.NewSize(int(headerLen) + CipherOverhead)
 		defer headerBuffer.Release()
 
 		_, err = headerBuffer.ReadFullFrom(c.Conn, headerBuffer.FreeLen())

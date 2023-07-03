@@ -136,8 +136,7 @@ func (w *AEADChunkWriter) Write(p []byte) (n int, err error) {
 	}
 	dataLength -= CipherOverhead
 
-	_lengthBuffer := buf.StackNewSize(2 + CipherOverhead)
-	lengthBuffer := common.Dup(_lengthBuffer)
+	lengthBuffer := buf.NewSize(2 + CipherOverhead)
 	binary.BigEndian.PutUint16(lengthBuffer.Extend(2), dataLength)
 
 	binary.BigEndian.PutUint16(w.nonce, w.nonceCount)
@@ -152,7 +151,6 @@ func (w *AEADChunkWriter) Write(p []byte) (n int, err error) {
 	}
 
 	lengthBuffer.Release()
-	common.KeepAlive(_lengthBuffer)
 
 	n, err = w.upstream.Write(p)
 	if err != nil {

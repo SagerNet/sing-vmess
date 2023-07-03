@@ -382,9 +382,7 @@ func (c *rawServerConn) writeResponse() error {
 		}
 		c.writer = bufio.NewExtendedWriter(CreateWriter(c.Conn, headerWriter, c.requestKey, c.requestNonce, responseKey[:], responseNonce[:], c.security, c.option))
 	} else {
-		_responseBuffer := buf.StackNewSize(2 + CipherOverhead + 4 + CipherOverhead)
-		defer common.KeepAlive(_responseBuffer)
-		responseBuffer := common.Dup(_responseBuffer)
+		responseBuffer := buf.NewSize(2 + CipherOverhead + 4 + CipherOverhead)
 		defer responseBuffer.Release()
 
 		_responseKey := sha256.Sum256(c.requestKey[:])

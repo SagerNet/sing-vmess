@@ -61,9 +61,7 @@ func (c *PacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 
 func (c *PacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	destination := M.SocksaddrFromNet(addr)
-	_buffer := buf.StackNewSize(AddressSerializer.AddrPortLen(destination) + len(p))
-	defer common.KeepAlive(_buffer)
-	buffer := common.Dup(_buffer)
+	buffer := buf.NewSize(AddressSerializer.AddrPortLen(destination) + len(p))
 	defer buffer.Release()
 	common.Must(AddressSerializer.WriteAddrPort(buffer, destination))
 	common.Must1(buffer.Write(p))

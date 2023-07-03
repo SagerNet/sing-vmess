@@ -105,20 +105,19 @@ var AddressSerializer = M.NewSerializer(
 
 func Key(user uuid.UUID) (key [16]byte) {
 	md5hash := md5.New()
-	common.Must1(md5hash.Write(common.Dup(user[:])))
+	common.Must1(md5hash.Write(user[:]))
 	common.Must1(md5hash.Write([]byte("c48619fe-8f02-49e0-b9e9-edf763e17e21")))
-	md5hash.Sum(common.Dup(key[:0]))
-	common.KeepAlive(user)
+	md5hash.Sum(key[:0])
 	return
 }
 
 func AlterId(user uuid.UUID) uuid.UUID {
 	md5hash := md5.New()
-	common.Must1(md5hash.Write(common.Dup(user[:])))
+	common.Must1(md5hash.Write(user[:]))
 	common.Must1(md5hash.Write([]byte("16167dc8-16b6-4e6d-b8bb-65dd68113a81")))
 	var newUser uuid.UUID
 	for {
-		md5hash.Sum(common.Dup(newUser[:0]))
+		md5hash.Sum(newUser[:0])
 		if user != newUser {
 			return newUser
 		}
@@ -132,7 +131,6 @@ func AuthID(key [16]byte, time time.Time, buffer *buf.Buffer) {
 	common.Must(binary.Write(buffer, binary.BigEndian, crc32.ChecksumIEEE(buffer.Bytes())))
 	aesBlock, err := aes.NewCipher(KDF(key[:], KDFSaltConstAuthIDEncryptionKey)[:16])
 	common.Must(err)
-	common.KeepAlive(key)
 	aesBlock.Encrypt(buffer.Bytes(), buffer.Bytes())
 }
 

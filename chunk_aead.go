@@ -99,7 +99,7 @@ func (w *AEADWriter) Write(p []byte) (n int, err error) {
 	return bufio.WriteBuffer(w, buf.As(p))
 	/*_buffer := buf.StackNewSize(len(p) + CipherOverhead)
 	defer common.KeepAlive(_buffer)
-	buffer := common.Dup(_buffer)
+	buffer := _buffer
 	defer buffer.Release()
 	binary.BigEndian.PutUint16(w.nonce, w.nonceCount)
 	w.nonceCount += 1

@@ -194,9 +194,7 @@ func (c *serverSession) recv() error {
 		return common.Error(io.CopyN(io.Discard, c.conn, int64(length)))
 	}
 
-	_data := buf.StackNewSize(int(length))
-	defer common.KeepAlive(_data)
-	data := common.Dup(_data)
+	data := buf.NewSize(int(length))
 	defer data.Release()
 
 	_, err = data.ReadFullFrom(c.conn, int(length))
