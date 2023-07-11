@@ -173,7 +173,11 @@ func (s *Service[U]) generateLegacyKeys() {
 
 func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, metadata M.Metadata) error {
 	const headerLenBufferLen = 2 + CipherOverhead
-	const minHeaderLen = 16 + headerLenBufferLen + 8 + CipherOverhead + 42
+	const aeadMinHeaderLen = 16 + headerLenBufferLen + 8 + CipherOverhead + 42
+	minHeaderLen := aeadMinHeaderLen
+	if len(s.alterIds) > 0 {
+		minHeaderLen = 16 + 38
+	}
 
 	requestBuffer := buf.New()
 	defer requestBuffer.Release()
@@ -253,6 +257,10 @@ func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 			return E.Extend(ErrBadHeader, io.ErrShortBuffer)
 		}
 	} else {
+		if requestBuffer.Len() < aeadMinHeaderLen {
+			return ErrBadHeader
+		}
+
 		reader = conn
 
 		const nonceIndex = 16 + headerLenBufferLen
