@@ -516,9 +516,12 @@ func (c *serverMuxPacketConn) WritePacket(buffer *buf.Buffer, destination M.Sock
 		binary.Write(header, binary.BigEndian, uint8(StatusKeep)),
 		binary.Write(header, binary.BigEndian, uint8(OptionData)),
 		binary.Write(header, binary.BigEndian, uint8(NetworkUDP)),
-		AddressSerializer.WriteAddrPort(header, destination),
-		binary.Write(header, binary.BigEndian, uint16(dataLen)),
 	)
+	err := AddressSerializer.WriteAddrPort(header, destination)
+	if err != nil {
+		return err
+	}
+	common.Must(binary.Write(header, binary.BigEndian, uint16(dataLen)))
 	return c.session.directWriter.WriteBuffer(buffer)
 }
 

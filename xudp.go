@@ -144,9 +144,12 @@ func (c *XUDPConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) erro
 			header.WriteByte(1), // frame type new
 			header.WriteByte(1), // option data
 			header.WriteByte(NetworkUDP),
-			AddressSerializer.WriteAddrPort(header, destination),
-			binary.Write(header, binary.BigEndian, uint16(dataLen)),
 		)
+		err := AddressSerializer.WriteAddrPort(header, destination)
+		if err != nil {
+			return err
+		}
+		common.Must(binary.Write(header, binary.BigEndian, uint16(dataLen)))
 		c.requestWritten = true
 	} else {
 		header := buffer.ExtendHeader(c.frontHeadroom(addrLen))

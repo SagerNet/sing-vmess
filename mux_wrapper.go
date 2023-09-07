@@ -119,9 +119,12 @@ func (c *MuxConnWrapper) WriteBuffer(buffer *buf.Buffer) error {
 			header.WriteByte(1), // frame type new
 			header.WriteByte(1), // option data
 			header.WriteByte(NetworkTCP),
-			AddressSerializer.WriteAddrPort(header, c.destination),
-			binary.Write(header, binary.BigEndian, uint16(dataLen)),
 		)
+		err := AddressSerializer.WriteAddrPort(header, c.destination)
+		if err != nil {
+			return err
+		}
+		common.Must(binary.Write(header, binary.BigEndian, uint16(dataLen)))
 		c.requestWritten = true
 	} else {
 		header := buffer.ExtendHeader(c.frontHeadroom(addrLen))

@@ -197,7 +197,10 @@ func (c *rawClientConn) writeHandshake(payload []byte) error {
 		idHash.Sum(requestBuffer.Extend(md5.Size)[:0])
 
 		headerBuffer := buf.With(requestBuffer.Extend(headerLen))
-		c.encodeHeader(headerBuffer, paddingLen)
+		err := c.encodeHeader(headerBuffer, paddingLen)
+		if err != nil {
+			return err
+		}
 
 		timeHash := md5.New()
 		common.Must(binary.Write(timeHash, binary.BigEndian, timestamp))
@@ -208,7 +211,6 @@ func (c *rawClientConn) writeHandshake(payload []byte) error {
 
 		var writer io.Writer
 		var bufferedWriter *bufio.BufferedWriter
-		var err error
 		if len(payload) > 0 {
 			bufferedWriter = bufio.NewBufferedWriter(c.Conn, buf.New())
 			_, err = bufferedWriter.Write(requestBuffer.Bytes())
@@ -287,7 +289,7 @@ func (c *rawClientConn) writeHandshake(payload []byte) error {
 	return nil
 }
 
-func (c *rawClientConn) encodeHeader(headerBuffer *buf.Buffer, paddingLen int) {
+func (c *rawClientConn) encodeHeader(headerBuffer *buf.Buffer, paddingLen int) error {
 	common.Must(headerBuffer.WriteByte(Version))
 	common.Must1(headerBuffer.Write(c.requestNonce[:]))
 
@@ -298,7 +300,10 @@ func (c *rawClientConn) encodeHeader(headerBuffer *buf.Buffer, paddingLen int) {
 	common.Must(headerBuffer.WriteZero())
 	common.Must(headerBuffer.WriteByte(c.command))
 	if c.command != CommandMux {
-		common.Must(AddressSerializer.WriteAddrPort(headerBuffer, c.destination))
+		err := AddressSerializer.WriteAddrPort(headerBuffer, c.destination)
+		if err != nil {
+			return err
+		}
 	}
 	if paddingLen > 0 {
 		headerBuffer.Extend(paddingLen)
@@ -306,6 +311,7 @@ func (c *rawClientConn) encodeHeader(headerBuffer *buf.Buffer, paddingLen int) {
 	headerHash := fnv.New32a()
 	common.Must1(headerHash.Write(headerBuffer.Bytes()))
 	headerHash.Sum(headerBuffer.Extend(4)[:0])
+	return nil
 }
 
 func (c *rawClientConn) readResponse() error {

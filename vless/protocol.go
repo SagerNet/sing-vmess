@@ -40,7 +40,10 @@ func WriteRequest(writer io.Writer, request Request, payload []byte) error {
 	)
 
 	if request.Command != vmess.CommandMux {
-		common.Must(vmess.AddressSerializer.WriteAddrPort(buffer, request.Destination))
+		err := vmess.AddressSerializer.WriteAddrPort(buffer, request.Destination)
+		if err != nil {
+			return err
+		}
 	}
 
 	common.Must1(buffer.Write(payload))
@@ -65,7 +68,12 @@ func WritePacketRequest(writer io.Writer, request Request, payload []byte) error
 		common.Error(buffer.Write(request.UUID)),
 		buffer.WriteByte(0),
 		buffer.WriteByte(vmess.CommandUDP),
-		vmess.AddressSerializer.WriteAddrPort(buffer, request.Destination),
+	)
+	err := vmess.AddressSerializer.WriteAddrPort(buffer, request.Destination)
+	if err != nil {
+		return err
+	}
+	common.Must(
 		binary.Write(buffer, binary.BigEndian, uint16(len(payload))),
 		common.Error(buffer.Write(payload)),
 	)

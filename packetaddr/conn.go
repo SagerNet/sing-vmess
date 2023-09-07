@@ -63,7 +63,10 @@ func (c *PacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	destination := M.SocksaddrFromNet(addr)
 	buffer := buf.NewSize(AddressSerializer.AddrPortLen(destination) + len(p))
 	defer buffer.Release()
-	common.Must(AddressSerializer.WriteAddrPort(buffer, destination))
+	err = AddressSerializer.WriteAddrPort(buffer, destination)
+	if err != nil {
+		return
+	}
 	common.Must1(buffer.Write(p))
 	return c.NetPacketConn.WriteTo(buffer.Bytes(), c.bindAddr.UDPAddr())
 }
@@ -85,7 +88,10 @@ func (c *PacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) er
 		return E.Extend(ErrFqdnUnsupported, destination.Fqdn)
 	}
 	header := buf.With(buffer.ExtendHeader(AddressSerializer.AddrPortLen(destination)))
-	common.Must(AddressSerializer.WriteAddrPort(header, destination))
+	err := AddressSerializer.WriteAddrPort(header, destination)
+	if err != nil {
+		return err
+	}
 	return c.NetPacketConn.WritePacket(buffer, c.bindAddr)
 }
 
