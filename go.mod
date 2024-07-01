@@ -7,7 +7,7 @@ require (
 	github.com/sagernet/reality v0.0.0-20230406110435-ee17307e7691
 	github.com/sagernet/sing v0.4.1
 	github.com/sagernet/utls v1.5.4
-	golang.org/x/crypto v0.24.0
+	golang.org/x/crypto v0.23.0
 )
 
 require (
