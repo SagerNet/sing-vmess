@@ -128,7 +128,7 @@ func (c *MuxConnWrapper) WriteBuffer(buffer *buf.Buffer) error {
 		c.requestWritten = true
 	} else {
 		header := buffer.ExtendHeader(c.frontHeadroom(addrLen))
-		binary.BigEndian.PutUint16(header, uint16(5+addrLen))
+		binary.BigEndian.PutUint16(header, 4)
 		header[2] = 0
 		header[3] = 0
 		header[4] = 2 // frame keep
