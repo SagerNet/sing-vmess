@@ -1,6 +1,5 @@
 package vless
 
-import "C"
 import (
 	"bytes"
 	"crypto/rand"
