@@ -149,10 +149,6 @@ func (c *serverConn) WriteVectorised(buffers []*buf.Buffer) error {
 	return c.writer.WriteVectorised(buffers)
 }
 
-func (c *serverConn) NeedAdditionalReadDeadline() bool {
-	return true
-}
-
 func (c *serverConn) FrontHeadroom() int {
 	if c.responseWritten {
 		return 0
@@ -166,6 +162,10 @@ func (c *serverConn) ReaderReplaceable() bool {
 
 func (c *serverConn) WriterReplaceable() bool {
 	return c.responseWritten
+}
+
+func (c *serverConn) NeedAdditionalReadDeadline() bool {
+	return true
 }
 
 func (c *serverConn) Upstream() any {
@@ -253,6 +253,10 @@ func (c *serverPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksad
 
 func (c *serverPacketConn) FrontHeadroom() int {
 	return 2
+}
+
+func (c *serverPacketConn) NeedAdditionalReadDeadline() bool {
+	return true
 }
 
 func (c *serverPacketConn) Upstream() any {

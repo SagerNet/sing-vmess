@@ -192,6 +192,10 @@ func (c *Conn) FrontHeadroom() int {
 	return RequestLen(c.request)
 }
 
+func (c *Conn) NeedAdditionalReadDeadline() bool {
+	return true
+}
+
 func (c *Conn) Upstream() any {
 	return c.ExtendedConn
 }
