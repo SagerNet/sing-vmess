@@ -3,10 +3,16 @@ package vless
 import (
 	"context"
 	"encoding/binary"
+	"encoding/hex"
+	"fmt"
 	"io"
 	"net"
+	"net/netip"
+	"sync"
+	"time"
 
-	"github.com/sagernet/sing-vmess"
+	vmess "github.com/sagernet/sing-vmess"
+	sAtomic "github.com/sagernet/sing/common/atomic"
 	"github.com/sagernet/sing/common/auth"
 	"github.com/sagernet/sing/common/buf"
 	"github.com/sagernet/sing/common/bufio"
@@ -21,8 +27,62 @@ import (
 type Service[T comparable] struct {
 	userMap  map[[16]byte]T
 	userFlow map[T]string
+	poolMap map[[16]byte]*poolUnit
 	logger   logger.Logger
 	handler  Handler
+}
+
+type poolUnit struct {
+	//ippmap sync.Map
+	ipmap map[netip.Addr]*ipunit //TODO: use sync.Map instead of mutex
+	maxlogin int
+	poolaccsess sync.RWMutex
+}
+// test func
+func (p *poolUnit) startchecker() {
+	for {
+		time.Sleep(3000 * time.Millisecond)
+		if len(p.ipmap) == 0 {
+			continue
+		}
+		for ip, unit := range p.ipmap {
+			current := unit.count.Load() - unit.closed.Load()
+			if current == 0 {
+				fmt.Println("removed", ip,)
+				p.poolaccsess.Lock()
+				delete(p.ipmap, ip)
+				p.poolaccsess.Unlock()
+			}
+		}
+	}
+}
+
+func (s *Service[T]) Startchecker() {
+	for {
+		time.Sleep(500 * time.Millisecond)
+		for key, punit  := range s.poolMap {
+			if len(punit.ipmap) == 0 {
+				continue
+			}
+			for ip, unit := range punit.ipmap {
+				current := unit.count.Load() - unit.closed.Load()
+				if current == 0 {
+					fmt.Println( hex.EncodeToString(key[:16]), " removed ", ip,)
+					punit.poolaccsess.Lock()
+					delete(punit.ipmap, ip)
+					punit.poolaccsess.Unlock()
+				}
+			}
+
+		}
+	}
+}
+
+
+type ipunit struct {
+	count *sAtomic.Int64
+	closed *sAtomic.Int64
+	
 }
 
 type Handler interface {
@@ -38,19 +98,40 @@ func NewService[T comparable](logger logger.Logger, handler Handler) *Service[T]
 	}
 }
 
-func (s *Service[T]) UpdateUsers(userList []T, userUUIDList []string, userFlowList []string) {
+func (s *Service[T]) UpdateUsers(userList []T, userUUIDList []string, userFlowList []string, maxloginList []int) {
 	userMap := make(map[[16]byte]T)
 	userFlowMap := make(map[T]string)
+	poolmap := make(map[[16]byte]*poolUnit)
 	for i, userName := range userList {
+		
+		var mxlogin int
 		userID := uuid.FromStringOrNil(userUUIDList[i])
 		if userID == uuid.Nil {
 			userID = uuid.NewV5(uuid.Nil, userUUIDList[i])
 		}
+		mxlogin = maxloginList[i]
+		if mxlogin <= 0 {
+			mxlogin = 1
+		} 
+		poolmap[userID] = &poolUnit{
+			ipmap: make(map[netip.Addr]*ipunit, mxlogin),
+			maxlogin: mxlogin,
+			poolaccsess: sync.RWMutex{},
+		}
+		//go poolmap[userID].startchecker()
+
 		userMap[userID] = userName
 		userFlowMap[userName] = userFlowList[i]
 	}
+
+	
 	s.userMap = userMap
 	s.userFlow = userFlowMap
+	s.poolMap = poolmap
+
+	go s.Startchecker()
+
+
 }
 
 var _ N.TCPConnectionHandler = (*Service[int])(nil)
@@ -64,6 +145,25 @@ func (s *Service[T]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 	if !loaded {
 		return E.New("unknown UUID: ", uuid.FromBytesOrNil(request.UUID[:]))
 	}
+
+
+	poolun := s.poolMap[request.UUID]
+	ipunitt, loaded := poolun.ipmap[metadata.Source.Addr]
+	if !loaded && len(poolun.ipmap) >= poolun.maxlogin {
+		s.logger.Error("ip pool already filled new connection from diffrent ips rejected ", metadata.Source.Addr,)
+		return E.New("max ip session overloaded")
+	} else if !loaded {
+		newunit := &ipunit{
+			count: new(sAtomic.Int64),
+			closed: new(sAtomic.Int64),
+		}
+		poolun.poolaccsess.Lock()
+		poolun.ipmap[metadata.Source.Addr] = newunit
+		poolun.poolaccsess.Unlock()
+		ipunitt = poolun.ipmap[metadata.Source.Addr]
+	}
+
+
 	ctx = auth.ContextWithUser(ctx, user)
 	metadata.Destination = request.Destination
 
@@ -77,7 +177,18 @@ func (s *Service[T]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 	if request.Command == vmess.CommandUDP {
 		return s.handler.NewPacketConnection(ctx, &serverPacketConn{ExtendedConn: bufio.NewExtendedConn(conn), destination: request.Destination}, metadata)
 	}
-	responseConn := &serverConn{ExtendedConn: bufio.NewExtendedConn(conn), writer: bufio.NewVectorisedWriter(conn)}
+
+	responseConn := &serverConn{
+		ExtendedConn: bufio.NewExtendedConn(conn), 
+		writer: bufio.NewVectorisedWriter(conn),
+		counterclose: func ()  {
+			ipunitt.closed.Add(1)
+		},
+		ct: closeconn{
+			mu: sync.RWMutex{},
+			isclosed: false,
+		},
+	}
 	switch userFlow {
 	case FlowVision:
 		conn, err = NewVisionConn(responseConn, conn, request.UUID, s.logger)
@@ -89,11 +200,15 @@ func (s *Service[T]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 	default:
 		return E.New("unknown flow: ", userFlow)
 	}
+	
 	switch request.Command {
 	case vmess.CommandTCP:
+		ipunitt.count.Add(1)
 		return s.handler.NewConnection(ctx, conn, metadata)
+		
 	case vmess.CommandMux:
 		return vmess.HandleMuxConnection(ctx, conn, s.handler)
+		
 	default:
 		return E.New("unknown command: ", request.Command)
 	}
@@ -112,6 +227,25 @@ type serverConn struct {
 	N.ExtendedConn
 	writer          N.VectorisedWriter
 	responseWritten bool
+	counterclose func()
+	ct closeconn
+}
+
+type closeconn struct {
+	mu sync.RWMutex
+	isclosed bool
+}
+
+func (c *serverConn) Close() error {
+	c.ct.mu.Lock()
+	if !c.ct.isclosed {
+		c.ct.isclosed = true
+		c.ct.mu.Unlock()
+		c.counterclose()
+		return c.ExtendedConn.Close()
+	}
+	c.ct.mu.Unlock()
+	return c.ExtendedConn.Close()
 }
 
 func (c *serverConn) Read(b []byte) (n int, err error) {
