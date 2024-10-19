@@ -3,8 +3,6 @@ package vless
 import (
 	"context"
 	"encoding/binary"
-	"encoding/hex"
-	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -46,9 +44,7 @@ func (p *poolUnit) startchecker() {
 			continue
 		}
 		for ip, unit := range p.ipmap {
-			current := unit.count.Load() - unit.closed.Load()
-			if current == 0 {
-				fmt.Println("removed", ip,)
+			if unit.count.Load() == 0 {
 				p.poolaccsess.Lock()
 				delete(p.ipmap, ip)
 				p.poolaccsess.Unlock()
@@ -60,14 +56,12 @@ func (p *poolUnit) startchecker() {
 func (s *Service[T]) Startchecker() {
 	for {
 		time.Sleep(500 * time.Millisecond)
-		for key, punit  := range s.poolMap {
+		for _, punit  := range s.poolMap {
 			if len(punit.ipmap) == 0 {
 				continue
 			}
 			for ip, unit := range punit.ipmap {
-				current := unit.count.Load() - unit.closed.Load()
-				if current == 0 {
-					fmt.Println( hex.EncodeToString(key[:16]), " removed ", ip,)
+				if unit.count.Load() == 0 {
 					punit.poolaccsess.Lock()
 					delete(punit.ipmap, ip)
 					punit.poolaccsess.Unlock()
@@ -81,7 +75,6 @@ func (s *Service[T]) Startchecker() {
 
 type ipunit struct {
 	count *sAtomic.Int64
-	closed *sAtomic.Int64
 	
 }
 
@@ -155,14 +148,13 @@ func (s *Service[T]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 	} else if !loaded {
 		newunit := &ipunit{
 			count: new(sAtomic.Int64),
-			closed: new(sAtomic.Int64),
 		}
 		poolun.poolaccsess.Lock()
 		poolun.ipmap[metadata.Source.Addr] = newunit
 		poolun.poolaccsess.Unlock()
 		ipunitt = poolun.ipmap[metadata.Source.Addr]
 	}
-
+	
 
 	ctx = auth.ContextWithUser(ctx, user)
 	metadata.Destination = request.Destination
@@ -182,7 +174,7 @@ func (s *Service[T]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 		ExtendedConn: bufio.NewExtendedConn(conn), 
 		writer: bufio.NewVectorisedWriter(conn),
 		counterclose: func ()  {
-			ipunitt.closed.Add(1)
+			ipunitt.count.Add(-1)
 		},
 		ct: closeconn{
 			mu: sync.RWMutex{},
@@ -207,7 +199,10 @@ func (s *Service[T]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 		return s.handler.NewConnection(ctx, conn, metadata)
 		
 	case vmess.CommandMux:
-		return vmess.HandleMuxConnection(ctx, conn, s.handler)
+		ipunitt.count.Add(1)
+		err = vmess.HandleMuxConnection(ctx, conn, s.handler)
+		ipunitt.count.Add(-1)
+		return err
 		
 	default:
 		return E.New("unknown command: ", request.Command)
