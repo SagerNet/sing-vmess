@@ -11,6 +11,7 @@ import (
 	E "github.com/sagernet/sing/common/exceptions"
 	M "github.com/sagernet/sing/common/metadata"
 	"github.com/sagernet/sing/common/rw"
+	"github.com/sagernet/sing/common/varbin"
 )
 
 const (
@@ -134,7 +135,7 @@ func WriteRequest(writer io.Writer, request Request, payload []byte) error {
 	var addonsLen int
 	if request.Flow != "" {
 		addonsLen += 1 // protobuf header
-		addonsLen += rw.UVariantLen(uint64(len(request.Flow)))
+		addonsLen += varbin.UvarintLen(uint64(len(request.Flow)))
 		// addonsLen += varbin.UvarintLen(uint64(len(request.Flow)))
 		addonsLen += len(request.Flow)
 		requestLen += addonsLen
@@ -153,8 +154,7 @@ func WriteRequest(writer io.Writer, request Request, payload []byte) error {
 	)
 	if addonsLen > 0 {
 		common.Must(buffer.WriteByte(10))
-		// binary.PutUvarint(buffer.Extend(varbin.UvarintLen(uint64(len(request.Flow)))), uint64(len(request.Flow)))
-		binary.PutUvarint(buffer.Extend(rw.UVariantLen(uint64(len(request.Flow)))), uint64(len(request.Flow)))
+		binary.PutUvarint(buffer.Extend(varbin.UvarintLen(uint64(len(request.Flow)))), uint64(len(request.Flow)))
 		common.Must(common.Error(buffer.WriteString(request.Flow)))
 	}
 	common.Must(
@@ -173,22 +173,11 @@ func WriteRequest(writer io.Writer, request Request, payload []byte) error {
 }
 
 func EncodeRequest(request Request, buffer *buf.Buffer) error {
-	var requestLen int
-	requestLen += 1  // version
-	requestLen += 16 // uuid
-	requestLen += 1  // protobuf length
-
 	var addonsLen int
 	if request.Flow != "" {
 		addonsLen += 1 // protobuf header
-		// addonsLen += varbin.UvarintLen(uint64(len(request.Flow)))
-		addonsLen += rw.UVariantLen(uint64(len(request.Flow)))
+		addonsLen += varbin.UvarintLen(uint64(len(request.Flow)))
 		addonsLen += len(request.Flow)
-		requestLen += addonsLen
-	}
-	requestLen += 1 // command
-	if request.Command != vmess.CommandMux {
-		requestLen += vmess.AddressSerializer.AddrPortLen(request.Destination)
 	}
 	common.Must(
 		buffer.WriteByte(Version),
@@ -197,8 +186,7 @@ func EncodeRequest(request Request, buffer *buf.Buffer) error {
 	)
 	if addonsLen > 0 {
 		common.Must(buffer.WriteByte(10))
-		// binary.PutUvarint(buffer.Extend(varbin.UvarintLen(uint64(len(request.Flow)))), uint64(len(request.Flow)))
-		binary.PutUvarint(buffer.Extend(rw.UVariantLen(uint64(len(request.Flow)))), uint64(len(request.Flow)))
+		binary.PutUvarint(buffer.Extend(varbin.UvarintLen(uint64(len(request.Flow)))), uint64(len(request.Flow)))
 		common.Must(common.Error(buffer.WriteString(request.Flow)))
 	}
 	common.Must(
@@ -223,8 +211,7 @@ func RequestLen(request Request) int {
 	var addonsLen int
 	if request.Flow != "" {
 		addonsLen += 1 // protobuf header
-		// addonsLen += varbin.UvarintLen(uint64(len(request.Flow)))
-		addonsLen += rw.UVariantLen(uint64(len(request.Flow)))
+		addonsLen += varbin.UvarintLen(uint64(len(request.Flow)))
 		addonsLen += len(request.Flow)
 		requestLen += addonsLen
 	}
@@ -263,8 +250,7 @@ func WritePacketRequest(writer io.Writer, request Request, payload []byte) error
 
 	if addonsLen > 0 {
 		common.Must(buffer.WriteByte(10))
-		// binary.PutUvarint(buffer.Extend(varbin.UvarintLen(uint64(len(request.Flow)))), uint64(len(request.Flow)))
-		binary.PutUvarint(buffer.Extend(rw.UVariantLen(uint64(len(request.Flow)))), uint64(len(request.Flow)))
+		binary.PutUvarint(buffer.Extend(varbin.UvarintLen(uint64(len(request.Flow)))), uint64(len(request.Flow)))
 		common.Must(common.Error(buffer.WriteString(request.Flow)))
 	}
 
