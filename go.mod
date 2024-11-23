@@ -5,7 +5,7 @@ go 1.20
 require (
 	github.com/gofrs/uuid/v5 v5.3.0
 	github.com/sagernet/reality v0.0.0-20230406110435-ee17307e7691
-	github.com/sagernet/sing v0.5.1
+	github.com/sagernet/sing v0.6.0-alpha.18
 	github.com/sagernet/utls v1.6.7
 	golang.org/x/crypto v0.31.0
 )

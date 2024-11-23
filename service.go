@@ -29,12 +29,9 @@ import (
 	"github.com/gofrs/uuid/v5"
 )
 
-var _ N.TCPConnectionHandler = (*Service[string])(nil)
-
 type Handler interface {
-	N.TCPConnectionHandler
-	N.UDPConnectionHandler
-	E.Handler
+	N.TCPConnectionHandlerEx
+	N.UDPConnectionHandlerEx
 }
 
 var (
@@ -171,7 +168,7 @@ func (s *Service[U]) generateLegacyKeys() {
 	s.alterIdMap = userAlterIdMap
 }
 
-func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, metadata M.Metadata) error {
+func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, source M.Socksaddr, onClose N.CloseHandlerFunc) error {
 	const headerLenBufferLen = 2 + CipherOverhead
 	const aeadMinHeaderLen = 16 + headerLenBufferLen + 8 + CipherOverhead + 42
 	minHeaderLen := aeadMinHeaderLen
@@ -322,8 +319,9 @@ func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 	if command == CommandUDP && option == 0 {
 		return E.New("bad packet connection")
 	}
+	var destination M.Socksaddr
 	if command != CommandMux {
-		metadata.Destination, err = AddressSerializer.ReadAddrPort(headerReader)
+		destination, err = AddressSerializer.ReadAddrPort(headerReader)
 		if err != nil {
 			return err
 		}
@@ -358,14 +356,15 @@ func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 
 	switch command {
 	case CommandTCP:
-		return s.handler.NewConnection(ctx, &serverConn{rawConn}, metadata)
+		s.handler.NewConnectionEx(ctx, &serverConn{rawConn}, source, destination, onClose)
 	case CommandUDP:
-		return s.handler.NewPacketConnection(ctx, &serverPacketConn{rawConn, metadata.Destination}, metadata)
+		s.handler.NewPacketConnectionEx(ctx, &serverPacketConn{rawConn, destination}, source, destination, onClose)
 	case CommandMux:
-		return HandleMuxConnection(ctx, &serverConn{rawConn}, s.handler)
+		return HandleMuxConnection(ctx, &serverConn{rawConn}, source, s.handler)
 	default:
 		return E.New("unknown command: ", command)
 	}
+	return nil
 }
 
 type rawServerConn struct {

@@ -26,9 +26,8 @@ type Service[T comparable] struct {
 }
 
 type Handler interface {
-	N.TCPConnectionHandler
-	N.UDPConnectionHandler
-	E.Handler
+	N.TCPConnectionHandlerEx
+	N.UDPConnectionHandlerEx
 }
 
 func NewService[T comparable](logger logger.Logger, handler Handler) *Service[T] {
@@ -53,9 +52,7 @@ func (s *Service[T]) UpdateUsers(userList []T, userUUIDList []string, userFlowLi
 	s.userFlow = userFlowMap
 }
 
-var _ N.TCPConnectionHandler = (*Service[int])(nil)
-
-func (s *Service[T]) NewConnection(ctx context.Context, conn net.Conn, metadata M.Metadata) error {
+func (s *Service[T]) NewConnection(ctx context.Context, conn net.Conn, source M.Socksaddr, onClose N.CloseHandlerFunc) error {
 	request, err := ReadRequest(conn)
 	if err != nil {
 		return err
@@ -65,8 +62,6 @@ func (s *Service[T]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 		return E.New("unknown UUID: ", uuid.FromBytesOrNil(request.UUID[:]))
 	}
 	ctx = auth.ContextWithUser(ctx, user)
-	metadata.Destination = request.Destination
-
 	userFlow := s.userFlow[user]
 	if request.Flow == FlowVision && request.Command == vmess.NetworkUDP {
 		return E.New(FlowVision, " flow does not support UDP")
@@ -75,7 +70,8 @@ func (s *Service[T]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 	}
 
 	if request.Command == vmess.CommandUDP {
-		return s.handler.NewPacketConnection(ctx, &serverPacketConn{ExtendedConn: bufio.NewExtendedConn(conn), destination: request.Destination}, metadata)
+		s.handler.NewPacketConnectionEx(ctx, &serverPacketConn{ExtendedConn: bufio.NewExtendedConn(conn), destination: request.Destination}, source, request.Destination, onClose)
+		return nil
 	}
 	responseConn := &serverConn{ExtendedConn: bufio.NewExtendedConn(conn), writer: bufio.NewVectorisedWriter(conn)}
 	switch userFlow {
@@ -91,9 +87,10 @@ func (s *Service[T]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 	}
 	switch request.Command {
 	case vmess.CommandTCP:
-		return s.handler.NewConnection(ctx, conn, metadata)
+		s.handler.NewConnectionEx(ctx, conn, source, request.Destination, onClose)
+		return nil
 	case vmess.CommandMux:
-		return vmess.HandleMuxConnection(ctx, conn, s.handler)
+		return vmess.HandleMuxConnection(ctx, conn, source, s.handler)
 	default:
 		return E.New("unknown command: ", request.Command)
 	}
