@@ -252,7 +252,8 @@ func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 		common.Must(binary.Write(timeHash, binary.BigEndian, legacyTimestamp))
 		userKey := s.userKey[user]
 		headerReader = NewStreamReader(reader, userKey[:], timeHash.Sum(nil))
-		headerBuffer, err = rw.ReadBytes(headerReader, 38)
+		headerBuffer = make([]byte, 38)
+		_, err = io.ReadFull(headerReader, headerBuffer)
 		if err != nil {
 			return E.Extend(ErrBadHeader, io.ErrShortBuffer)
 		}
