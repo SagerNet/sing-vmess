@@ -20,6 +20,7 @@ import (
 )
 
 func HandleMuxConnection(ctx context.Context, conn net.Conn, handler Handler) error {
+	ctx, cancel := context.WithCancelCause(ctx)
 	session := &serverSession{
 		ctx:          ctx,
 		conn:         conn,
@@ -28,13 +29,11 @@ func HandleMuxConnection(ctx context.Context, conn net.Conn, handler Handler) er
 		streams:      make(map[uint16]*serverStream),
 		writer:       std_bufio.NewWriter(conn),
 	}
-	if ctx.Done() != nil {
-		go func() {
-			<-ctx.Done()
-			session.cleanup(ctx.Err())
-		}()
-	}
-	return session.recvLoop()
+	go func() {
+		<-ctx.Done()
+		session.cleanup(ctx.Err())
+	}()
+	return session.recvLoop(cancel)
 }
 
 type serverSession struct {
@@ -55,11 +54,11 @@ type serverStream struct {
 	pipe        *io.PipeWriter
 }
 
-func (c *serverSession) recvLoop() error {
+func (c *serverSession) recvLoop(cancel context.CancelCauseFunc) error {
 	for {
 		err := c.recv()
 		if err != nil {
-			c.cleanup(err)
+			cancel(err)
 			return E.Cause(err, "mux connection closed")
 		}
 	}
