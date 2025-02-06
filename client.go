@@ -34,9 +34,9 @@ type Client struct {
 }
 
 func NewClient(userId string, security string, alterId int, options ...ClientOption) (*Client, error) {
-	user := uuid.FromStringOrNil(userId)
-	if user == uuid.Nil {
-		user = uuid.NewV5(user, userId)
+	user, err := uuid.FromString(userId)
+	if err != nil {
+		user = uuid.NewV5(uuid.Nil, userId)
 	}
 
 	var rawSecurity byte

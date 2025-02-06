@@ -81,9 +81,9 @@ func (s *Service[U]) UpdateUsers(userList []U, userIdList []string, alterIdList 
 	userAlterIds := make(map[U][][16]byte)
 	for i, user := range userList {
 		userId := userIdList[i]
-		userUUID := uuid.FromStringOrNil(userId)
-		if userUUID == uuid.Nil {
-			userUUID = uuid.NewV5(userUUID, userId)
+		userUUID, err := uuid.FromString(userId)
+		if err != nil {
+			userUUID = uuid.NewV5(uuid.Nil, userId)
 		}
 		userCmdKey := Key(userUUID)
 		userKeyMap[user] = userCmdKey
