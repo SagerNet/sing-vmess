@@ -25,9 +25,9 @@ type Client struct {
 }
 
 func NewClient(userId string, flow string, logger logger.Logger) (*Client, error) {
-	user := uuid.FromStringOrNil(userId)
-	if user == uuid.Nil {
-		user = uuid.NewV5(user, userId)
+	user, err := uuid.FromString(userId)
+	if err != nil {
+		user = uuid.NewV5(uuid.Nil, userId)
 	}
 	switch flow {
 	case "", "xtls-rprx-vision":

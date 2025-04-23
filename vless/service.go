@@ -41,8 +41,8 @@ func (s *Service[T]) UpdateUsers(userList []T, userUUIDList []string, userFlowLi
 	userMap := make(map[[16]byte]T)
 	userFlowMap := make(map[T]string)
 	for i, userName := range userList {
-		userID := uuid.FromStringOrNil(userUUIDList[i])
-		if userID == uuid.Nil {
+		userID, err := uuid.FromString(userUUIDList[i])
+		if err != nil {
 			userID = uuid.NewV5(uuid.Nil, userUUIDList[i])
 		}
 		userMap[userID] = userName
