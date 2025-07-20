@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"net"
 	"reflect"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -35,12 +36,13 @@ const xrayChunkSize = 8192
 
 type VisionConn struct {
 	net.Conn
-	reader   *bufio.ChunkReader
-	writer   N.VectorisedWriter
-	input    *bytes.Reader
-	rawInput *bytes.Buffer
-	netConn  net.Conn
-	logger   logger.Logger
+	reader      *bufio.ChunkReader
+	writer      N.VectorisedWriter
+	writeAccess sync.Mutex
+	input       *bytes.Reader
+	rawInput    *bytes.Buffer
+	netConn     net.Conn
+	logger      logger.Logger
 
 	userUUID               [16]byte
 	isTLS                  bool
@@ -186,6 +188,8 @@ func (c *VisionConn) Read(p []byte) (n int, err error) {
 }
 
 func (c *VisionConn) Write(p []byte) (n int, err error) {
+	c.writeAccess.Lock()
+	defer c.writeAccess.Unlock()
 	if c.numberOfPacketToFilter > 0 {
 		c.filterTLS([][]byte{p})
 	}
@@ -219,10 +223,14 @@ func (c *VisionConn) Write(p []byte) (n int, err error) {
 			}
 			buffers = buffers[specIndex+1:]
 			c.writer = bufio.NewVectorisedWriter(c.netConn)
-			c.logger.Trace("XtlsWrite writeV ", specIndex, " ", buf.LenMulti(encryptedBuffer), " ", len(buffers))
-			time.Sleep(5 * time.Millisecond) // wtf
+			if len(buffers) > 0 {
+				c.logger.Trace("XtlsWrite writeV ", specIndex, " ", buf.LenMulti(encryptedBuffer), " ", len(buffers))
+				time.Sleep(5 * time.Millisecond) // wtf
+			}
 		}
-		err = c.writer.WriteVectorised(buffers)
+		if len(buffers) > 0 {
+			err = c.writer.WriteVectorised(buffers)
+		}
 		if err == nil {
 			n = inputLen
 		}
