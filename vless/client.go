@@ -88,14 +88,10 @@ func (c *Client) DialEarlyXUDPPacketConn(conn net.Conn, destination M.Socksaddr)
 	return vmess.NewXUDPConn(protocolConn, destination), common.Error(remoteConn.Write(nil))
 }
 
-var (
-	_ N.EarlyConn        = (*Conn)(nil)
-	_ N.VectorisedWriter = (*Conn)(nil)
-)
+var _ N.EarlyConn = (*Conn)(nil)
 
 type Conn struct {
 	N.ExtendedConn
-	writer         N.VectorisedWriter
 	request        Request
 	requestWritten bool
 	responseRead   bool
@@ -104,7 +100,6 @@ type Conn struct {
 func NewConn(conn net.Conn, uuid [16]byte, command byte, destination M.Socksaddr, flow string) *Conn {
 	return &Conn{
 		ExtendedConn: bufio.NewExtendedConn(conn),
-		writer:       bufio.NewVectorisedWriter(conn),
 		request: Request{
 			UUID:        uuid,
 			Command:     command,
@@ -157,20 +152,6 @@ func (c *Conn) WriteBuffer(buffer *buf.Buffer) error {
 		c.requestWritten = true
 	}
 	return c.ExtendedConn.WriteBuffer(buffer)
-}
-
-func (c *Conn) WriteVectorised(buffers []*buf.Buffer) error {
-	if !c.requestWritten {
-		buffer := buf.NewSize(RequestLen(c.request))
-		err := EncodeRequest(c.request, buffer)
-		if err != nil {
-			buffer.Release()
-			return err
-		}
-		c.requestWritten = true
-		return c.writer.WriteVectorised(append([]*buf.Buffer{buffer}, buffers...))
-	}
-	return c.writer.WriteVectorised(buffers)
 }
 
 func (c *Conn) ReaderReplaceable() bool {

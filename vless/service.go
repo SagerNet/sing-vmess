@@ -73,7 +73,7 @@ func (s *Service[T]) NewConnection(ctx context.Context, conn net.Conn, source M.
 		s.handler.NewPacketConnectionEx(ctx, &serverPacketConn{ExtendedConn: bufio.NewExtendedConn(conn), destination: request.Destination}, source, request.Destination, onClose)
 		return nil
 	}
-	responseConn := &serverConn{ExtendedConn: bufio.NewExtendedConn(conn), writer: bufio.NewVectorisedWriter(conn)}
+	responseConn := &serverConn{ExtendedConn: bufio.NewExtendedConn(conn)}
 	switch userFlow {
 	case FlowVision:
 		conn, err = NewVisionConn(responseConn, conn, request.UUID, s.logger)
@@ -103,11 +103,8 @@ func flowName(value string) string {
 	return value
 }
 
-var _ N.VectorisedWriter = (*serverConn)(nil)
-
 type serverConn struct {
 	N.ExtendedConn
-	writer          N.VectorisedWriter
 	responseWritten bool
 }
 
@@ -117,7 +114,12 @@ func (c *serverConn) Read(b []byte) (n int, err error) {
 
 func (c *serverConn) Write(b []byte) (n int, err error) {
 	if !c.responseWritten {
-		_, err = bufio.WriteVectorised(c.writer, [][]byte{{Version, 0}, b})
+		buffer := buf.NewSize(2 + len(b))
+		buffer.WriteByte(Version)
+		buffer.WriteByte(0)
+		buffer.Write(b)
+		_, err = c.ExtendedConn.Write(buffer.Bytes())
+		buffer.Release()
 		if err == nil {
 			n = len(b)
 		}
@@ -135,15 +137,6 @@ func (c *serverConn) WriteBuffer(buffer *buf.Buffer) error {
 		c.responseWritten = true
 	}
 	return c.ExtendedConn.WriteBuffer(buffer)
-}
-
-func (c *serverConn) WriteVectorised(buffers []*buf.Buffer) error {
-	if !c.responseWritten {
-		err := c.writer.WriteVectorised(append([]*buf.Buffer{buf.As([]byte{Version, 0})}, buffers...))
-		c.responseWritten = true
-		return err
-	}
-	return c.writer.WriteVectorised(buffers)
 }
 
 func (c *serverConn) FrontHeadroom() int {
