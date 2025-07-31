@@ -204,7 +204,7 @@ func (c *PacketConn) Read(b []byte) (n int, err error) {
 	if err != nil {
 		return
 	}
-	if cap(b) < int(length) {
+	if len(b) < int(length) {
 		return 0, io.ErrShortBuffer
 	}
 	return io.ReadFull(c.Conn, b[:length])
