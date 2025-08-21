@@ -180,8 +180,8 @@ func (c *VisionConn) Read(p []byte) (n int, err error) {
 			c.filterTLS([][]byte{bufferBytes})
 		}
 		if chunkBuffer != nil {
-			n = copy(p, bufferBytes)
-			chunkBuffer.Advance(n)
+			c.remainingReader = chunkBuffer
+			return c.Read(p)
 		}
 		return
 	}
