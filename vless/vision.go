@@ -182,7 +182,7 @@ func (c *VisionConn) Read(p []byte) (n int, err error) {
 		}
 		if chunkBuffer != nil {
 			c.remainingBuffers = append(c.remainingBuffers, buf.As(chunkBuffer.Bytes()))
-			chunkBuffer.Reset()
+			chunkBuffer.Reset() // chunkBuffer should not be release and only reused after c.remainingBuffers be emptied, so must reset at here
 			return c.Read(p)
 		}
 		return
