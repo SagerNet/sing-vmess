@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"io"
 
+	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/buf"
 	"github.com/sagernet/sing/common/bufio"
 	N "github.com/sagernet/sing/common/network"
@@ -117,7 +118,7 @@ func (w *AEADWriter) WriteBuffer(buffer *buf.Buffer) error {
 	w.nonceCount += 1
 	w.cipher.Seal(buffer.Index(0), w.nonce, buffer.Bytes(), nil)
 	buffer.Extend(CipherOverhead)
-	return w.upstream.WriteBuffer(buffer)
+	return common.Error(bufio.WriteBuffer(w.upstream, buffer))
 }
 
 func (w *AEADWriter) RearHeadroom() int {
