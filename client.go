@@ -105,6 +105,11 @@ func (c *Client) DialEarlyXUDPPacketConn(upstream net.Conn, destination M.Socksa
 	return NewXUDPConn(&clientConn{c.dialRaw(upstream, CommandMux, destination)}, destination)
 }
 
+var (
+	_ N.EarlyReader = (*rawClientConn)(nil)
+	_ N.EarlyWriter = (*rawClientConn)(nil)
+)
+
 type rawClientConn struct {
 	*Client
 	net.Conn
@@ -161,7 +166,11 @@ func (c *Client) dialRaw(upstream net.Conn, command byte, destination M.Socksadd
 	return conn
 }
 
-func (c *rawClientConn) NeedHandshake() bool {
+func (c *rawClientConn) NeedHandshakeForRead() bool {
+	return c.reader == nil
+}
+
+func (c *rawClientConn) NeedHandshakeForWrite() bool {
 	return c.writer == nil
 }
 

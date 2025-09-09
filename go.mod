@@ -5,7 +5,7 @@ go 1.20
 require (
 	github.com/gofrs/uuid/v5 v5.3.2
 	github.com/metacubex/utls v1.7.3
-	github.com/sagernet/sing v0.6.11
+	github.com/sagernet/sing v0.7.8-0.20250909124511-ab3827767cea
 	golang.org/x/crypto v0.33.0
 )
 
