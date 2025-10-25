@@ -63,7 +63,7 @@ type VisionConn struct {
 }
 
 func NewVisionConn(conn net.Conn, tlsConn net.Conn, userUUID [16]byte, logger logger.Logger) (*VisionConn, error) {
-  tlsConn = unwrapConn(tlsConn)
+	tlsConn = unwrapConn(tlsConn)
 	var (
 		loaded         bool
 		reflectType    reflect.Type
