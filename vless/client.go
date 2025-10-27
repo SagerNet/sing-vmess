@@ -39,7 +39,9 @@ func NewClient(userId string, flow string, logger logger.Logger) (*Client, error
 
 func (c *Client) prepareConn(conn net.Conn, tlsConn net.Conn) (net.Conn, error) {
 	if c.flow == FlowVision {
-		protocolConn, err := NewVisionConn(conn, tlsConn, c.key, c.logger)
+		// Unwrap to find the real TLS connection
+		actualTLSConn := unwrapConn(tlsConn)
+		protocolConn, err := NewVisionConn(conn, actualTLSConn, c.key, c.logger)
 		if err != nil {
 			return nil, E.Cause(err, "initialize vision")
 		}
