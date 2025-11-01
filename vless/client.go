@@ -63,6 +63,10 @@ func (c *Client) DialEarlyConn(conn net.Conn, destination M.Socksaddr) (net.Conn
 	return c.prepareConn(NewConn(conn, c.key, vmess.CommandTCP, destination, c.flow), conn)
 }
 
+func (c *Client) DialEarlyConnWithBase(conn net.Conn, baseConn net.Conn, destination M.Socksaddr) (net.Conn, error) {
+	return c.prepareConn(NewConn(conn, c.key, vmess.CommandTCP, destination, c.flow), baseConn)
+}
+
 func (c *Client) DialPacketConn(conn net.Conn, destination M.Socksaddr) (*PacketConn, error) {
 	serverConn := &PacketConn{Conn: conn, key: c.key, destination: destination, flow: c.flow}
 	return serverConn, common.Error(serverConn.Write(nil))
