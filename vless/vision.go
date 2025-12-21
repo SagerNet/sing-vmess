@@ -63,231 +63,37 @@ type VisionConn struct {
 	remainingBuffers       []*buf.Buffer
 }
 
+type EncryptionConn interface {
+	net.Conn
+	IsEncryptionLayer() bool
+}
+
+type visionConnInfo struct {
+	netConn  net.Conn
+	rawConn  net.Conn
+	input    *bytes.Reader
+	rawInput *bytes.Buffer
+}
+
 func NewVisionConn(conn net.Conn, tlsConn net.Conn, userUUID [16]byte, logger logger.Logger) (*VisionConn, error) {
 	// tlsConn can be:
 	// 1. TLS connection (when TLS/Reality is used)
 	// 2. Encryption layer (when only encryption is used, no TLS/Reality)
-	// Unwrap to find the actual connection
-	originalTLSConn := unwrapConn(tlsConn)
+	baseConn := unwrapConn(tlsConn)
 
-	var (
-		loaded         bool
-		reflectType    reflect.Type
-		reflectPointer uintptr
-		netConn        net.Conn
-		input          *bytes.Reader
-		rawInput       *bytes.Buffer
-		rawConn        net.Conn
-	)
-
-	// Check if originalTLSConn is an encryption layer (no TLS/Reality case)
-	isEncryptionOnly := false
-	var actualConn net.Conn // Declare here to avoid goto issue
-	var hasEncryption bool  // Declare here to avoid goto issue
-
-	if upstream, ok := originalTLSConn.(common.WithUpstream); ok {
-		if upstreamConn, ok := upstream.Upstream().(net.Conn); ok {
-			// This is an encryption layer
-			connType := reflect.TypeOf(originalTLSConn).Elem()
-			if connType.Name() == "CommonConn" || connType.Name() == "XorConn" {
-				isEncryptionOnly = true
-				// For encryption-only mode, use the encryption layer's upstream as netConn
-				netConn = upstreamConn
-
-				// Directly use encryption layer's input/rawInput fields
-				if connType.Name() == "CommonConn" {
-					reflectType = connType
-					reflectPointer = uintptr(unsafe.Pointer(reflect.ValueOf(originalTLSConn).Pointer()))
-
-					inputField, inputOk := reflectType.FieldByName("input")
-					rawInputField, rawInputOk := reflectType.FieldByName("rawInput")
-
-					if inputOk && rawInputOk {
-						input = (*bytes.Reader)(unsafe.Pointer(reflectPointer + inputField.Offset))
-						rawInput = (*bytes.Buffer)(unsafe.Pointer(reflectPointer + rawInputField.Offset))
-						// In encryption-only mode, rawConn should be the upstream of encryption layer
-						// This allows Vision to bypass encryption in direct mode
-						rawConn = upstreamConn
-
-						// Skip the rest of the unwrapping logic
-						goto skipUnwrap
-					}
-				}
-			}
-		}
+	info, err := extractVisionConnInfo(conn, baseConn)
+	if err != nil {
+		return nil, err
 	}
 
-	// Check if conn has encryption layer
-	// If so, use encryption layer's input/rawInput fields
-	hasEncryption = false
-
-	// The conn passed in is vless.Conn which wraps the actual connection stack
-	// We need to unwrap to find the encryption layer (CommonConn)
-	actualConn = conn
-
-	// First, check if this is a visionConnWrapper
-	if wrapper, ok := conn.(common.WithUpstream); ok {
-		if _, ok := wrapper.Upstream().(net.Conn); ok {
-			// The wrapper's embedded Conn field is what we want
-			wrapperValue := reflect.ValueOf(conn).Elem()
-			connField := wrapperValue.FieldByName("Conn")
-			if connField.IsValid() {
-				actualConn = connField.Interface().(net.Conn)
-			}
-		}
-	}
-
-	// Now actualConn might be vless.Conn, which embeds ExtendedConn
-	// We need to unwrap further to find the encryption layer
-	// Try to access ExtendedConn field
-	if actualConnValue := reflect.ValueOf(actualConn); actualConnValue.Kind() == reflect.Ptr {
-		actualConnElem := actualConnValue.Elem()
-		if extendedConnField := actualConnElem.FieldByName("ExtendedConn"); extendedConnField.IsValid() {
-			extendedConn := extendedConnField.Interface()
-
-			// ExtendedConn might wrap the encryption layer
-			// Try to unwrap it by calling Upstream() if available
-			if extendedWithUpstream, ok := extendedConn.(common.WithUpstream); ok {
-				if upstream := extendedWithUpstream.Upstream(); upstream != nil {
-					if upstreamConn, ok := upstream.(net.Conn); ok {
-						actualConn = upstreamConn
-					}
-				}
-			}
-		}
-	}
-
-	// Now check if actualConn is visionConnWrapper again (nested wrapping)
-	// If so, unwrap it to get the encryption layer
-	if wrapper, ok := actualConn.(common.WithUpstream); ok {
-		if _, ok := wrapper.Upstream().(net.Conn); ok {
-			// Access the Conn field to get the encryption layer
-			wrapperValue := reflect.ValueOf(actualConn).Elem()
-			connField := wrapperValue.FieldByName("Conn")
-			if connField.IsValid() {
-				actualConn = connField.Interface().(net.Conn)
-			}
-		}
-	}
-
-	// Now check if actualConn is an encryption layer (CommonConn or XorConn)
-	if upstream, ok := actualConn.(common.WithUpstream); ok {
-		if upstreamConn, ok := upstream.Upstream().(net.Conn); ok {
-			// Check if this is XorConn - if so, don't penetrate it
-			actualConnType := reflect.TypeOf(actualConn).Elem()
-			if actualConnType.Name() == "XorConn" {
-				// XorConn should not be penetrated in direct mode
-				// Use XorConn itself as rawConn
-				hasEncryption = true
-				rawConn = actualConn
-
-				// XorConn doesn't have input/rawInput fields, use TLS connection's fields
-				for _, tlsCreator := range tlsRegistry {
-					var tlsReflectType reflect.Type
-					var tlsReflectPointer uintptr
-					loaded, _, tlsReflectType, tlsReflectPointer = tlsCreator(originalTLSConn)
-					if loaded {
-						inputField, _ := tlsReflectType.FieldByName("input")
-						rawInputField, _ := tlsReflectType.FieldByName("rawInput")
-						input = (*bytes.Reader)(unsafe.Pointer(tlsReflectPointer + inputField.Offset))
-						rawInput = (*bytes.Buffer)(unsafe.Pointer(tlsReflectPointer + rawInputField.Offset))
-						break
-					}
-				}
-			} else {
-				// This is CommonConn - use reflection to access its input/rawInput fields
-				hasEncryption = true
-				reflectType = reflect.TypeOf(actualConn).Elem()
-				reflectPointer = uintptr(unsafe.Pointer(reflect.ValueOf(actualConn).Pointer()))
-
-				inputField, inputOk := reflectType.FieldByName("input")
-				rawInputField, rawInputOk := reflectType.FieldByName("rawInput")
-
-				if inputOk && rawInputOk {
-					input = (*bytes.Reader)(unsafe.Pointer(reflectPointer + inputField.Offset))
-					rawInput = (*bytes.Buffer)(unsafe.Pointer(reflectPointer + rawInputField.Offset))
-				} else {
-					return nil, E.New("vision: encryption layer missing input/rawInput fields")
-				}
-
-				// For rawConn in direct mode
-				if isEncryptionOnly {
-					// Encryption-only mode: use encryption layer itself
-					rawConn = actualConn
-				} else {
-					// TLS + Encryption mode: use the encryption layer's upstream (TLS connection)
-					rawConn = upstreamConn
-				}
-			}
-		}
-	}
-
-	// Get TLS connection info for netConn (only if not encryption-only mode)
-	if !isEncryptionOnly {
-		for _, tlsCreator := range tlsRegistry {
-			loaded, netConn, _, _ = tlsCreator(originalTLSConn)
-			if loaded {
-				break
-			}
-		}
-		if !loaded {
-			return nil, E.New("vision: not a valid supported TLS connection: ", reflect.TypeOf(originalTLSConn))
-		}
-	}
-
-	// If no encryption layer, use TLS connection's input/rawInput fields
-	// Or if encryption-only mode, use encryption layer's fields
-	if !hasEncryption {
-		if isEncryptionOnly {
-			// Encryption-only mode: use encryption layer's input/rawInput
-			reflectType = reflect.TypeOf(originalTLSConn).Elem()
-			reflectPointer = uintptr(unsafe.Pointer(reflect.ValueOf(originalTLSConn).Pointer()))
-
-			inputField, inputOk := reflectType.FieldByName("input")
-			rawInputField, rawInputOk := reflectType.FieldByName("rawInput")
-
-			if inputOk && rawInputOk {
-				input = (*bytes.Reader)(unsafe.Pointer(reflectPointer + inputField.Offset))
-				rawInput = (*bytes.Buffer)(unsafe.Pointer(reflectPointer + rawInputField.Offset))
-			} else {
-				return nil, E.New("vision: encryption layer missing input/rawInput fields")
-			}
-		} else {
-			// TLS mode: use TLS connection's input/rawInput
-			for _, tlsCreator := range tlsRegistry {
-				loaded, netConn, reflectType, reflectPointer = tlsCreator(originalTLSConn)
-				if loaded {
-					break
-				}
-			}
-			inputField, _ := reflectType.FieldByName("input")
-			rawInputField, _ := reflectType.FieldByName("rawInput")
-			input = (*bytes.Reader)(unsafe.Pointer(reflectPointer + inputField.Offset))
-			rawInput = (*bytes.Buffer)(unsafe.Pointer(reflectPointer + rawInputField.Offset))
-		}
-	}
-
-	// Determine rawConn for direct mode if not already set by encryption detection
-	if rawConn == nil {
-		if isEncryptionOnly {
-			// Encryption-only mode: use encryption layer for direct mode
-			// This allows Vision to work with encryption without TLS
-			rawConn = originalTLSConn
-		} else {
-			// Without encryption: use TCP connection for direct mode
-			rawConn = netConn
-		}
-	}
-
-skipUnwrap:
 	return &VisionConn{
 		Conn:     conn,
 		reader:   bufio.NewChunkReader(conn, xrayChunkSize),
 		writer:   bufio.NewVectorisedWriter(conn),
-		input:    input,
-		rawInput: rawInput,
-		netConn:  netConn,
-		rawConn:  rawConn,
+		input:    info.input,
+		rawInput: info.rawInput,
+		netConn:  info.netConn,
+		rawConn:  info.rawConn,
 		logger:   logger,
 
 		userUUID:               userUUID,
@@ -299,6 +105,193 @@ skipUnwrap:
 		remainingContent:       -1,
 		remainingPadding:       -1,
 	}, nil
+}
+
+func extractVisionConnInfo(conn net.Conn, baseConn net.Conn) (*visionConnInfo, error) {
+	if isEncryptionConn(baseConn) {
+		return extractEncryptionInfo(conn, baseConn)
+	}
+
+	encConn := findEncryptionInStack(conn)
+	if encConn != nil {
+		return extractTLSWithEncryptionInfo(baseConn, encConn)
+	}
+
+	return extractTLSInfo(baseConn)
+}
+
+func extractEncryptionInfo(conn net.Conn, encConn net.Conn) (*visionConnInfo, error) {
+	info := &visionConnInfo{}
+
+	if upstream, ok := encConn.(common.WithUpstream); ok {
+		if upstreamConn, ok := upstream.Upstream().(net.Conn); ok {
+			info.netConn = upstreamConn
+			info.rawConn = upstreamConn
+		}
+	}
+
+	if err := extractInputFields(encConn, info); err != nil {
+		return nil, err
+	}
+
+	return info, nil
+}
+
+func extractTLSWithEncryptionInfo(tlsConn net.Conn, encConn net.Conn) (*visionConnInfo, error) {
+	info := &visionConnInfo{}
+
+	for _, tlsCreator := range tlsRegistry {
+		loaded, netConn, _, _ := tlsCreator(tlsConn)
+		if loaded {
+			info.netConn = netConn
+			break
+		}
+	}
+	if info.netConn == nil {
+		return nil, E.New("vision: not a valid supported TLS connection: ", reflect.TypeOf(tlsConn))
+	}
+
+	if isXorConn(encConn) {
+		info.rawConn = encConn
+		if err := extractInputFieldsFromTLS(tlsConn, info); err != nil {
+			return nil, err
+		}
+	} else {
+		if upstream, ok := encConn.(common.WithUpstream); ok {
+			if upstreamConn, ok := upstream.Upstream().(net.Conn); ok {
+				info.rawConn = upstreamConn
+			}
+		}
+		if err := extractInputFields(encConn, info); err != nil {
+			return nil, err
+		}
+	}
+
+	return info, nil
+}
+
+func extractTLSInfo(tlsConn net.Conn) (*visionConnInfo, error) {
+	info := &visionConnInfo{}
+
+	for _, tlsCreator := range tlsRegistry {
+		loaded, netConn, reflectType, reflectPointer := tlsCreator(tlsConn)
+		if loaded {
+			info.netConn = netConn
+			info.rawConn = netConn
+
+			inputField, _ := reflectType.FieldByName("input")
+			rawInputField, _ := reflectType.FieldByName("rawInput")
+			info.input = (*bytes.Reader)(unsafe.Pointer(reflectPointer + inputField.Offset))
+			info.rawInput = (*bytes.Buffer)(unsafe.Pointer(reflectPointer + rawInputField.Offset))
+			return info, nil
+		}
+	}
+
+	return nil, E.New("vision: not a valid supported TLS connection: ", reflect.TypeOf(tlsConn))
+}
+
+func extractInputFields(encConn net.Conn, info *visionConnInfo) error {
+	reflectType := reflect.TypeOf(encConn).Elem()
+	reflectPointer := uintptr(unsafe.Pointer(reflect.ValueOf(encConn).Pointer()))
+
+	inputField, inputOk := reflectType.FieldByName("input")
+	rawInputField, rawInputOk := reflectType.FieldByName("rawInput")
+
+	if !inputOk || !rawInputOk {
+		return E.New("vision: encryption layer missing input/rawInput fields")
+	}
+
+	info.input = (*bytes.Reader)(unsafe.Pointer(reflectPointer + inputField.Offset))
+	info.rawInput = (*bytes.Buffer)(unsafe.Pointer(reflectPointer + rawInputField.Offset))
+	return nil
+}
+
+func extractInputFieldsFromTLS(tlsConn net.Conn, info *visionConnInfo) error {
+	for _, tlsCreator := range tlsRegistry {
+		loaded, _, reflectType, reflectPointer := tlsCreator(tlsConn)
+		if loaded {
+			inputField, _ := reflectType.FieldByName("input")
+			rawInputField, _ := reflectType.FieldByName("rawInput")
+			info.input = (*bytes.Reader)(unsafe.Pointer(reflectPointer + inputField.Offset))
+			info.rawInput = (*bytes.Buffer)(unsafe.Pointer(reflectPointer + rawInputField.Offset))
+			return nil
+		}
+	}
+	return E.New("vision: failed to extract input fields from TLS connection")
+}
+
+func isEncryptionConn(conn net.Conn) bool {
+	if enc, ok := conn.(EncryptionConn); ok {
+		return enc.IsEncryptionLayer()
+	}
+	if reflect.TypeOf(conn).Kind() == reflect.Ptr {
+		typeName := reflect.TypeOf(conn).Elem().Name()
+		return typeName == "CommonConn" || typeName == "XorConn"
+	}
+	return false
+}
+
+func isXorConn(conn net.Conn) bool {
+	if reflect.TypeOf(conn).Kind() == reflect.Ptr {
+		return reflect.TypeOf(conn).Elem().Name() == "XorConn"
+	}
+	return false
+}
+
+func findEncryptionInStack(conn net.Conn) net.Conn {
+	current := conn
+
+	if wrapper, ok := current.(common.WithUpstream); ok {
+		if upstream, ok := wrapper.Upstream().(net.Conn); ok {
+			wrapperValue := reflect.ValueOf(current).Elem()
+			if connField := wrapperValue.FieldByName("Conn"); connField.IsValid() {
+				current = connField.Interface().(net.Conn)
+			} else {
+				current = upstream
+			}
+		}
+	}
+
+	if currentValue := reflect.ValueOf(current); currentValue.Kind() == reflect.Ptr {
+		currentElem := currentValue.Elem()
+		if extField := currentElem.FieldByName("ExtendedConn"); extField.IsValid() {
+			if extWithUpstream, ok := extField.Interface().(common.WithUpstream); ok {
+				if upstream := extWithUpstream.Upstream(); upstream != nil {
+					if upstreamConn, ok := upstream.(net.Conn); ok {
+						current = upstreamConn
+					}
+				}
+			}
+		}
+	}
+
+	for current != nil {
+		if isEncryptionConn(current) {
+			return current
+		}
+
+		if upstream, ok := current.(common.WithUpstream); ok {
+			if next, ok := upstream.Upstream().(net.Conn); ok && next != nil && next != current {
+				current = next
+				continue
+			}
+		}
+		break
+	}
+
+	return nil
+}
+
+func (c *VisionConn) SetUplinkConn(conn net.Conn) {
+	if conn == nil {
+		return
+	}
+	c.writeAccess.Lock()
+	defer c.writeAccess.Unlock()
+	c.rawConn = conn
+	if c.directWrite {
+		c.writer = bufio.NewVectorisedWriter(conn)
+	}
 }
 
 type netConnProvider interface {
@@ -318,13 +311,8 @@ func unwrapConn(conn net.Conn) net.Conn {
 			break
 		}
 
-		// Check if this is an encryption layer (CommonConn/XorConn) - stop here
-		if reflect.TypeOf(conn).Kind() == reflect.Ptr {
-			typeName := reflect.TypeOf(conn).Elem().Name()
-			if typeName == "CommonConn" || typeName == "XorConn" {
-				// Stop unwrapping at encryption layer
-				break
-			}
+		if isEncryptionConn(conn) {
+			break
 		}
 
 		switched := false
