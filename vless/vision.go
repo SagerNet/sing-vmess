@@ -42,7 +42,8 @@ type VisionConn struct {
 	input       *bytes.Reader
 	rawInput    *bytes.Buffer
 	netConn     net.Conn
-	rawConn     net.Conn // raw connection for direct mode (may include encryption layer)
+	rawConn     net.Conn // raw connection for Vision internal operations (TLS/encryption layer)
+	directConn  net.Conn
 	logger      logger.Logger
 
 	userUUID               [16]byte
@@ -52,6 +53,7 @@ type VisionConn struct {
 	remainingServerHello   int32
 	cipher                 uint16
 	enableXTLS             bool
+	canSplice              bool
 	isPadding              bool
 	directWrite            bool
 	writeUUID              bool
@@ -75,7 +77,7 @@ type visionConnInfo struct {
 	rawInput *bytes.Buffer
 }
 
-func NewVisionConn(conn net.Conn, tlsConn net.Conn, userUUID [16]byte, logger logger.Logger) (*VisionConn, error) {
+func NewVisionConn(conn net.Conn, tlsConn net.Conn, userUUID [16]byte, logger logger.Logger, canSplice bool) (*VisionConn, error) {
 	// tlsConn can be:
 	// 1. TLS connection (when TLS/Reality is used)
 	// 2. Encryption layer (when only encryption is used, no TLS/Reality)
@@ -87,18 +89,20 @@ func NewVisionConn(conn net.Conn, tlsConn net.Conn, userUUID [16]byte, logger lo
 	}
 
 	return &VisionConn{
-		Conn:     conn,
-		reader:   bufio.NewChunkReader(conn, xrayChunkSize),
-		writer:   bufio.NewVectorisedWriter(conn),
-		input:    info.input,
-		rawInput: info.rawInput,
-		netConn:  info.netConn,
-		rawConn:  info.rawConn,
-		logger:   logger,
+		Conn:       conn,
+		reader:     bufio.NewChunkReader(conn, xrayChunkSize),
+		writer:     bufio.NewVectorisedWriter(conn),
+		input:      info.input,
+		rawInput:   info.rawInput,
+		netConn:    info.netConn,
+		rawConn:    info.rawConn,
+		directConn: info.rawConn,
+		logger:     logger,
 
 		userUUID:               userUUID,
 		numberOfPacketToFilter: 8,
 		remainingServerHello:   -1,
+		canSplice:              canSplice,
 		isPadding:              true,
 		writeUUID:              true,
 		withinPaddingBuffers:   true,
@@ -282,16 +286,20 @@ func findEncryptionInStack(conn net.Conn) net.Conn {
 	return nil
 }
 
-func (c *VisionConn) SetUplinkConn(conn net.Conn) {
+func (c *VisionConn) SetDirectConn(conn net.Conn) {
 	if conn == nil {
 		return
 	}
 	c.writeAccess.Lock()
 	defer c.writeAccess.Unlock()
-	c.rawConn = conn
+	c.directConn = conn
 	if c.directWrite {
 		c.writer = bufio.NewVectorisedWriter(conn)
 	}
+}
+
+func (c *VisionConn) SetUplinkConn(conn net.Conn) {
+	c.SetDirectConn(conn)
 }
 
 type netConnProvider interface {
@@ -388,7 +396,7 @@ func (c *VisionConn) Read(p []byte) (n int, err error) {
 		return
 	}
 	if c.directRead {
-		return c.rawConn.Read(p)
+		return c.directConn.Read(p)
 	}
 	var bufferBytes []byte
 	var chunkBuffer *buf.Buffer
@@ -474,7 +482,7 @@ func (c *VisionConn) Write(p []byte) (n int, err error) {
 		for i, buffer := range buffers {
 			if c.isTLS && buffer.Len() > 6 && bytes.Equal(tlsApplicationDataStart, buffer.To(3)) {
 				var command byte = commandPaddingEnd
-				if c.enableXTLS {
+				if c.enableXTLS && c.canSplice {
 					c.directWrite = true
 					specIndex = i
 					command = commandPaddingDirect
@@ -496,10 +504,10 @@ func (c *VisionConn) Write(p []byte) (n int, err error) {
 				return
 			}
 			buffers = buffers[specIndex+1:]
-			c.writer = bufio.NewVectorisedWriter(c.rawConn)
+			c.writer = bufio.NewVectorisedWriter(c.directConn)
 			if len(buffers) > 0 {
 				c.logger.Trace("XtlsWrite writeV ", specIndex, " ", buf.LenMulti(encryptedBuffer), " ", len(buffers))
-				time.Sleep(5 * time.Millisecond) // wtf
+				time.Sleep(2 * time.Millisecond)
 			}
 		}
 		if len(buffers) > 0 {
@@ -511,7 +519,7 @@ func (c *VisionConn) Write(p []byte) (n int, err error) {
 		return
 	}
 	if c.directWrite {
-		return c.rawConn.Write(p)
+		return c.directConn.Write(p)
 	} else {
 		return c.Conn.Write(p)
 	}
@@ -658,4 +666,30 @@ func (c *VisionConn) NeedAdditionalReadDeadline() bool {
 
 func (c *VisionConn) Upstream() any {
 	return c.Conn
+}
+
+func (c *VisionConn) ReaderReplaceable() bool {
+	return c.directRead
+}
+
+func (c *VisionConn) WriterReplaceable() bool {
+	c.writeAccess.Lock()
+	defer c.writeAccess.Unlock()
+	return c.directWrite
+}
+
+func (c *VisionConn) UpstreamReader() any {
+	if c.directRead {
+		return c.directConn
+	}
+	return nil
+}
+
+func (c *VisionConn) UpstreamWriter() any {
+	c.writeAccess.Lock()
+	defer c.writeAccess.Unlock()
+	if c.directWrite {
+		return c.directConn
+	}
+	return nil
 }
