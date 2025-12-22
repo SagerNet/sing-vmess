@@ -244,43 +244,60 @@ func isXorConn(conn net.Conn) bool {
 
 func findEncryptionInStack(conn net.Conn) net.Conn {
 	current := conn
+	visited := make(map[uintptr]struct{})
 
-	if wrapper, ok := current.(common.WithUpstream); ok {
-		if upstream, ok := wrapper.Upstream().(net.Conn); ok {
-			wrapperValue := reflect.ValueOf(current).Elem()
-			if connField := wrapperValue.FieldByName("Conn"); connField.IsValid() {
-				current = connField.Interface().(net.Conn)
-			} else {
-				current = upstream
-			}
+	for current != nil {
+		ptr := reflect.ValueOf(current).Pointer()
+		if _, ok := visited[ptr]; ok {
+			break
 		}
+		visited[ptr] = struct{}{}
+
+		if isEncryptionConn(current) {
+			return current
+		}
+
+		next := getNextConn(current)
+		if next == nil || next == current {
+			break
+		}
+		current = next
 	}
 
-	if currentValue := reflect.ValueOf(current); currentValue.Kind() == reflect.Ptr {
-		currentElem := currentValue.Elem()
-		if extField := currentElem.FieldByName("ExtendedConn"); extField.IsValid() {
-			if extWithUpstream, ok := extField.Interface().(common.WithUpstream); ok {
-				if upstream := extWithUpstream.Upstream(); upstream != nil {
-					if upstreamConn, ok := upstream.(net.Conn); ok {
-						current = upstreamConn
+	return nil
+}
+
+func getNextConn(conn net.Conn) net.Conn {
+	connValue := reflect.ValueOf(conn)
+	if connValue.Kind() == reflect.Ptr {
+		connElem := connValue.Elem()
+		if connElem.IsValid() && connElem.Kind() == reflect.Struct {
+			if extField := connElem.FieldByName("ExtendedConn"); extField.IsValid() && !extField.IsNil() {
+				extConn := extField.Interface()
+				if upstream, ok := extConn.(common.WithUpstream); ok {
+					if next, ok := upstream.Upstream().(net.Conn); ok && next != nil {
+						return next
+					}
+				}
+				if next, ok := extConn.(net.Conn); ok {
+					return next
+				}
+			}
+
+			if connField := connElem.FieldByName("Conn"); connField.IsValid() {
+				if connField.Kind() == reflect.Interface && !connField.IsNil() {
+					if next, ok := connField.Interface().(net.Conn); ok {
+						return next
 					}
 				}
 			}
 		}
 	}
 
-	for current != nil {
-		if isEncryptionConn(current) {
-			return current
+	if upstream, ok := conn.(common.WithUpstream); ok {
+		if next, ok := upstream.Upstream().(net.Conn); ok && next != nil {
+			return next
 		}
-
-		if upstream, ok := current.(common.WithUpstream); ok {
-			if next, ok := upstream.Upstream().(net.Conn); ok && next != nil && next != current {
-				current = next
-				continue
-			}
-		}
-		break
 	}
 
 	return nil
