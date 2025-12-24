@@ -38,3 +38,48 @@ func reshapeBuffer(b []byte) []*buf.Buffer {
 	}
 	return []*buf.Buffer{buf.As(b[:index]), buf.As(b[index:])}
 }
+
+func isCompleteRecord(b []byte) bool {
+	headerLen := 5
+	recordLen := 0
+	totalLen := len(b)
+	i := 0
+
+	for i < totalLen {
+		// record header: 0x17 0x03 0x03 + 2 bytes length
+		if headerLen > 0 {
+			data := b[i]
+			i++
+			switch headerLen {
+			case 5:
+				if data != 0x17 {
+					return false
+				}
+			case 4:
+				if data != 0x03 {
+					return false
+				}
+			case 3:
+				if data != 0x03 {
+					return false
+				}
+			case 2:
+				recordLen = int(data) << 8
+			case 1:
+				recordLen = recordLen | int(data)
+			}
+			headerLen--
+		} else if recordLen > 0 {
+			remaining := totalLen - i
+			if remaining < recordLen {
+				return false
+			}
+			i += recordLen
+			recordLen = 0
+			headerLen = 5
+		} else {
+			return false
+		}
+	}
+	return headerLen == 5 && recordLen == 0
+}

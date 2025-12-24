@@ -494,10 +494,11 @@ func (c *VisionConn) Write(p []byte) (n int, err error) {
 	}
 	if c.isPadding {
 		inputLen := len(p)
+		isComplete := isCompleteRecord(p)
 		buffers := reshapeBuffer(p)
 		var specIndex int
 		for i, buffer := range buffers {
-			if c.isTLS && buffer.Len() > 6 && bytes.Equal(tlsApplicationDataStart, buffer.To(3)) {
+			if c.isTLS && buffer.Len() > 6 && bytes.Equal(tlsApplicationDataStart, buffer.To(3)) && isComplete {
 				var command byte = commandPaddingEnd
 				if c.enableXTLS && c.canSplice {
 					c.directWrite = true
