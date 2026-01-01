@@ -9,7 +9,6 @@ import (
 	"net"
 	"reflect"
 	"sync"
-	"time"
 	"unsafe"
 
 	"github.com/sagernet/sing/common"
@@ -496,43 +495,44 @@ func (c *VisionConn) Write(p []byte) (n int, err error) {
 		inputLen := len(p)
 		isComplete := isCompleteRecord(p)
 		buffers := reshapeBuffer(p)
-		var specIndex int
+		switchToDirectAfterWrite := false
 		for i, buffer := range buffers {
 			if c.isTLS && buffer.Len() > 6 && bytes.Equal(tlsApplicationDataStart, buffer.To(3)) && isComplete {
-				var command byte = commandPaddingEnd
 				if c.enableXTLS && c.canSplice {
-					c.directWrite = true
-					specIndex = i
-					command = commandPaddingDirect
+					switchToDirectAfterWrite = true
 				}
 				c.isPadding = false
-				buffers[i] = c.padding(buffer, command)
-				break
+				if i == len(buffers)-1 {
+					var command byte = commandPaddingEnd
+					if switchToDirectAfterWrite {
+						command = commandPaddingDirect
+					}
+					buffers[i] = c.padding(buffer, command)
+				} else {
+					buffers[i] = c.padding(buffer, commandPaddingContinue)
+				}
+				continue
 			} else if !c.isTLS12orAbove && c.numberOfPacketToFilter <= 1 {
 				c.isPadding = false
 				buffers[i] = c.padding(buffer, commandPaddingEnd)
 				break
 			}
-			buffers[i] = c.padding(buffer, commandPaddingContinue)
-		}
-		if c.directWrite {
-			encryptedBuffer := buffers[:specIndex+1]
-			err = c.writer.WriteVectorised(encryptedBuffer)
-			if err != nil {
-				return
+			var command byte = commandPaddingContinue
+			if i == len(buffers)-1 && !c.isPadding {
+				command = commandPaddingEnd
+				if switchToDirectAfterWrite {
+					command = commandPaddingDirect
+				}
 			}
-			buffers = buffers[specIndex+1:]
-			c.writer = bufio.NewVectorisedWriter(c.directConn)
-			if len(buffers) > 0 {
-				c.logger.Trace("XtlsWrite writeV ", specIndex, " ", buf.LenMulti(encryptedBuffer), " ", len(buffers))
-				time.Sleep(2 * time.Millisecond)
-			}
+			buffers[i] = c.padding(buffer, command)
 		}
-		if len(buffers) > 0 {
-			err = c.writer.WriteVectorised(buffers)
-		}
+		err = c.writer.WriteVectorised(buffers)
 		if err == nil {
 			n = inputLen
+			if switchToDirectAfterWrite {
+				c.directWrite = true
+				c.writer = bufio.NewVectorisedWriter(c.directConn)
+			}
 		}
 		return
 	}
