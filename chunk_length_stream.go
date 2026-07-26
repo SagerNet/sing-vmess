@@ -96,6 +96,9 @@ func NewStreamChunkWriter(upstream io.Writer, chunkMasking sha3.ShakeHash, globa
 }
 
 func (w *StreamChunkWriter) Write(p []byte) (n int, err error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
 	dataLen := uint16(len(p))
 	var paddingLen uint16
 	if w.globalPadding != nil || w.chunkMasking != nil {
@@ -133,6 +136,10 @@ func (w *StreamChunkWriter) Write(p []byte) (n int, err error) {
 }
 
 func (w *StreamChunkWriter) WriteBuffer(buffer *buf.Buffer) error {
+	if buffer.IsEmpty() {
+		buffer.Release()
+		return nil
+	}
 	dataLen := uint16(buffer.Len())
 	var paddingLen uint16
 	if w.globalPadding != nil || w.chunkMasking != nil {
