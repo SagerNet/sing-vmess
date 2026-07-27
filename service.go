@@ -444,6 +444,10 @@ func (c *rawServerConn) RearHeadroom() int {
 	return MaxRearHeadroom
 }
 
+func (c *rawServerConn) ReaderOverhead() int {
+	return ReaderOverhead(c.security, c.option)
+}
+
 func (c *rawServerConn) NeedHandshakeForWrite() bool {
 	return c.writer == nil
 }

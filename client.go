@@ -423,6 +423,10 @@ func (c *rawClientConn) RearHeadroom() int {
 	return MaxRearHeadroom
 }
 
+func (c *rawClientConn) ReaderOverhead() int {
+	return ReaderOverhead(c.security, c.option)
+}
+
 func (c *rawClientConn) NeedAdditionalReadDeadline() bool {
 	return true
 }

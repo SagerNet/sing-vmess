@@ -99,6 +99,10 @@ func (c *PacketConn) FrontHeadroom() int {
 	return M.MaxIPSocksaddrLength
 }
 
+func (c *PacketConn) ReaderOverhead() int {
+	return M.MaxIPSocksaddrLength
+}
+
 func (c *PacketConn) Upstream() any {
 	return c.NetPacketConn
 }
