@@ -38,8 +38,14 @@ func NewClient(userId string, flow string, logger logger.Logger) (*Client, error
 }
 
 func (c *Client) prepareConn(conn net.Conn, tlsConn net.Conn) (net.Conn, error) {
+	return c.prepareConnWithOptions(conn, tlsConn, true)
+}
+
+func (c *Client) prepareConnWithOptions(conn net.Conn, tlsConn net.Conn, canSplice bool) (net.Conn, error) {
 	if c.flow == FlowVision {
-		protocolConn, err := NewVisionConn(conn, tlsConn, c.key, c.logger)
+		// Unwrap to find the real TLS connection
+		actualTLSConn := unwrapConn(tlsConn)
+		protocolConn, err := NewVisionConn(conn, actualTLSConn, c.key, c.logger, canSplice)
 		if err != nil {
 			return nil, E.Cause(err, "initialize vision")
 		}
@@ -59,6 +65,14 @@ func (c *Client) DialConn(conn net.Conn, destination M.Socksaddr) (net.Conn, err
 
 func (c *Client) DialEarlyConn(conn net.Conn, destination M.Socksaddr) (net.Conn, error) {
 	return c.prepareConn(NewConn(conn, c.key, vmess.CommandTCP, destination, c.flow), conn)
+}
+
+func (c *Client) DialEarlyConnWithBase(conn net.Conn, baseConn net.Conn, destination M.Socksaddr) (net.Conn, error) {
+	return c.DialEarlyConnWithOptions(conn, baseConn, destination, true)
+}
+
+func (c *Client) DialEarlyConnWithOptions(conn net.Conn, baseConn net.Conn, destination M.Socksaddr, canSplice bool) (net.Conn, error) {
+	return c.prepareConnWithOptions(NewConn(conn, c.key, vmess.CommandTCP, destination, c.flow), baseConn, canSplice)
 }
 
 func (c *Client) DialPacketConn(conn net.Conn, destination M.Socksaddr) (*PacketConn, error) {
