@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 
+	"github.com/google/uuid"
 	"github.com/sagernet/sing-vmess"
 	"github.com/sagernet/sing/common/auth"
 	"github.com/sagernet/sing/common/buf"
@@ -14,15 +15,12 @@ import (
 	"github.com/sagernet/sing/common/logger"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
-
-	"github.com/gofrs/uuid/v5"
 )
 
-type Service[T comparable] struct {
-	userMap  map[[16]byte]T
-	userFlow map[T]string
-	logger   logger.Logger
-	handler  Handler
+type Service struct {
+	logger      logger.Logger
+	handler     Handler
+	userHandler IUserHandler
 }
 
 type Handler interface {
@@ -30,43 +28,34 @@ type Handler interface {
 	N.UDPConnectionHandlerEx
 }
 
-func NewService[T comparable](logger logger.Logger, handler Handler) *Service[T] {
-	return &Service[T]{
-		logger:  logger,
-		handler: handler,
+type IUserHandler interface {
+	Get(id uuid.UUID) (*User, bool)
+}
+
+func NewService(logger logger.Logger, handler Handler, authHandler IUserHandler) *Service {
+	return &Service{
+		logger:      logger,
+		handler:     handler,
+		userHandler: authHandler,
 	}
 }
 
-func (s *Service[T]) UpdateUsers(userList []T, userUUIDList []string, userFlowList []string) {
-	userMap := make(map[[16]byte]T)
-	userFlowMap := make(map[T]string)
-	for i, userName := range userList {
-		userID, err := uuid.FromString(userUUIDList[i])
-		if err != nil {
-			userID = uuid.NewV5(uuid.Nil, userUUIDList[i])
-		}
-		userMap[userID] = userName
-		userFlowMap[userName] = userFlowList[i]
-	}
-	s.userMap = userMap
-	s.userFlow = userFlowMap
-}
-
-func (s *Service[T]) NewConnection(ctx context.Context, conn net.Conn, source M.Socksaddr, onClose N.CloseHandlerFunc) error {
+func (s *Service) NewConnection(ctx context.Context, conn net.Conn, source M.Socksaddr, onClose N.CloseHandlerFunc) error {
 	request, err := ReadRequest(conn)
 	if err != nil {
 		return err
 	}
-	user, loaded := s.userMap[request.UUID]
-	if !loaded {
-		return E.New("unknown UUID: ", uuid.FromBytesOrNil(request.UUID[:]))
+
+	user, ok := s.userHandler.Get(request.UUID)
+	if !ok {
+		return E.New("user not found")
 	}
+
 	ctx = auth.ContextWithUser(ctx, user)
-	userFlow := s.userFlow[user]
 	if request.Flow == FlowVision && request.Command == vmess.NetworkUDP {
 		return E.New(FlowVision, " flow does not support UDP")
-	} else if request.Flow != userFlow {
-		return E.New("flow mismatch: expected ", flowName(userFlow), ", but got ", flowName(request.Flow))
+	} else if request.Flow != user.Flow {
+		return E.New("flow mismatch: expected ", flowName(user.Flow), ", but got ", flowName(request.Flow))
 	}
 
 	if request.Command == vmess.CommandUDP {
@@ -74,7 +63,7 @@ func (s *Service[T]) NewConnection(ctx context.Context, conn net.Conn, source M.
 		return nil
 	}
 	responseConn := &serverConn{ExtendedConn: bufio.NewExtendedConn(conn)}
-	switch userFlow {
+	switch user.Flow {
 	case FlowVision:
 		conn, err = NewVisionConn(responseConn, conn, request.UUID, s.logger)
 		if err != nil {
@@ -83,7 +72,7 @@ func (s *Service[T]) NewConnection(ctx context.Context, conn net.Conn, source M.
 	case "":
 		conn = responseConn
 	default:
-		return E.New("unknown flow: ", userFlow)
+		return E.New("unknown flow: ", user.Flow)
 	}
 	switch request.Command {
 	case vmess.CommandTCP:
