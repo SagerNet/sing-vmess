@@ -24,6 +24,9 @@ func (r *StreamChecksumReader) Read(p []byte) (n int, err error) {
 	if err != nil {
 		return
 	}
+	if n < 4 {
+		return 0, ErrInvalidChecksum
+	}
 	hash := fnv.New32a()
 	common.Must1(hash.Write(p[4:n]))
 	if hash.Sum32() != binary.BigEndian.Uint32(p) {
@@ -37,6 +40,9 @@ func (r *StreamChecksumReader) ReadBuffer(buffer *buf.Buffer) error {
 	err := r.upstream.ReadBuffer(buffer)
 	if err != nil {
 		return err
+	}
+	if buffer.Len() < 4 {
+		return ErrInvalidChecksum
 	}
 	hash := fnv.New32a()
 	common.Must1(hash.Write(buffer.From(4)))
@@ -66,6 +72,7 @@ func (w *StreamChecksumWriter) Write(p []byte) (n int, err error) {
 }
 
 func (w *StreamChecksumWriter) WriteBuffer(buffer *buf.Buffer) error {
+	defer buffer.Release()
 	hash := fnv.New32a()
 	common.Must1(hash.Write(buffer.Bytes()))
 	hash.Sum(buffer.ExtendHeader(4)[:0])

@@ -57,64 +57,69 @@ func (c *XUDPConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 
 func (c *XUDPConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksaddr, err error) {
 	start := buffer.Start()
-	_, err = buffer.ReadFullFrom(c.Conn, 6)
-	if err != nil {
-		return
-	}
 	var length uint16
-	err = binary.Read(buffer, binary.BigEndian, &length)
-	if err != nil {
-		return
-	}
-	header, err := buffer.ReadBytes(4)
-	if err != nil {
-		return
-	}
-	switch header[2] {
-	case StatusNew:
-		return M.Socksaddr{}, E.New("unexpected frame new")
-	case StatusKeep:
-		if length != 4 {
-			_, err = buffer.ReadFullFrom(c.Conn, int(length)-2)
-			if err != nil {
-				return
-			}
-			buffer.Advance(1)
-			destination, err = AddressSerializer.ReadAddrPort(buffer)
-			if err != nil {
-				return
-			}
-			destination = destination.Unwrap()
-		} else {
-			_, err = buffer.ReadFullFrom(c.Conn, 2)
-			if err != nil {
-				return
-			}
-			destination = c.destination
+	for {
+		_, err = buffer.ReadFullFrom(c.Conn, 6)
+		if err != nil {
+			return
 		}
-	case StatusEnd:
-		return M.Socksaddr{}, io.EOF
-	case StatusKeepAlive:
-	default:
-		return M.Socksaddr{}, E.New("unexpected frame: ", buffer.Byte(2))
-	}
-	// option error
-	if header[3]&2 == 2 {
-		return M.Socksaddr{}, E.Cause(net.ErrClosed, "remote closed")
-	}
-	// option data
-	if header[3]&1 != 1 {
-		buffer.Resize(start, 0)
-		return c.ReadPacket(buffer)
-	} else {
 		err = binary.Read(buffer, binary.BigEndian, &length)
 		if err != nil {
 			return
 		}
+		if length < 4 {
+			return M.Socksaddr{}, E.New("invalid frame length: ", length)
+		}
+		var header []byte
+		header, err = buffer.ReadBytes(4)
+		if err != nil {
+			return
+		}
+		switch header[2] {
+		case StatusNew:
+			return M.Socksaddr{}, E.New("unexpected frame new")
+		case StatusKeep:
+			if length != 4 {
+				_, err = buffer.ReadFullFrom(c.Conn, int(length)-2)
+				if err != nil {
+					return
+				}
+				buffer.Advance(1)
+				destination, err = AddressSerializer.ReadAddrPort(buffer)
+				if err != nil {
+					return
+				}
+				destination = destination.Unwrap()
+			} else {
+				_, err = buffer.ReadFullFrom(c.Conn, 2)
+				if err != nil {
+					return
+				}
+				destination = c.destination
+			}
+		case StatusEnd:
+			return M.Socksaddr{}, io.EOF
+		case StatusKeepAlive:
+		default:
+			return M.Socksaddr{}, E.New("unexpected frame: ", buffer.Byte(2))
+		}
+		// option error
+		if header[3]&2 == 2 {
+			return M.Socksaddr{}, E.Cause(net.ErrClosed, "remote closed")
+		}
+		// option data
+		if header[3]&1 == 1 {
+			break
+		}
 		buffer.Resize(start, 0)
-		_, err = buffer.ReadFullFrom(c.Conn, int(length))
+	}
+	err = binary.Read(buffer, binary.BigEndian, &length)
+	if err != nil {
 		return
 	}
+	buffer.Resize(start, 0)
+	_, err = buffer.ReadFullFrom(c.Conn, int(length))
+	return
 }
 
 func (c *XUDPConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {

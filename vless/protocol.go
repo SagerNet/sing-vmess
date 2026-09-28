@@ -97,6 +97,9 @@ func readAddons(reader *bytes.Reader) (*Addons, error) {
 			if err != nil {
 				return nil, err
 			}
+			if flowLen > uint64(reader.Len()) {
+				return nil, io.ErrUnexpectedEOF
+			}
 			flowBytes := make([]byte, flowLen)
 			_, err = io.ReadFull(reader, flowBytes)
 			if err != nil {
@@ -107,6 +110,9 @@ func readAddons(reader *bytes.Reader) (*Addons, error) {
 			seedLen, err := binary.ReadUvarint(reader)
 			if err != nil {
 				return nil, err
+			}
+			if seedLen > uint64(reader.Len()) {
+				return nil, io.ErrUnexpectedEOF
 			}
 			seedBytes := make([]byte, seedLen)
 			_, err = io.ReadFull(reader, seedBytes)
