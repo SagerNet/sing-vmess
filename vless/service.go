@@ -45,6 +45,8 @@ func (s *Service[T]) UpdateUsers(userList []T, userUUIDList []string, userFlowLi
 		if err != nil {
 			userID = uuid.NewV5(uuid.Nil, userUUIDList[i])
 		}
+		userID[6] = 0
+		userID[7] = 0
 		userMap[userID] = userName
 		userFlowMap[userName] = userFlowList[i]
 	}
@@ -57,11 +59,16 @@ func (s *Service[T]) NewConnection(ctx context.Context, conn net.Conn, source M.
 	if err != nil {
 		return err
 	}
-	user, loaded := s.userMap[request.UUID]
+	vlessRoute := binary.BigEndian.Uint16(request.UUID[6:8])
+	lookupUUID := request.UUID
+	lookupUUID[6] = 0
+	lookupUUID[7] = 0
+	user, loaded := s.userMap[lookupUUID]
 	if !loaded {
-		return E.New("unknown UUID: ", uuid.FromBytesOrNil(request.UUID[:]))
+		return E.New("unknown UUID: ", uuid.FromBytesOrNil(lookupUUID[:]))
 	}
 	ctx = auth.ContextWithUser(ctx, user)
+	ctx = ContextWithVLESSRoute(ctx, vlessRoute)
 	userFlow := s.userFlow[user]
 	if request.Flow == FlowVision && request.Command == vmess.NetworkUDP {
 		return E.New(FlowVision, " flow does not support UDP")
