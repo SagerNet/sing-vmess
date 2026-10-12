@@ -148,6 +148,7 @@ func (w *AEADChunkWriter) Write(p []byte) (n int, err error) {
 	lengthBuffer.Extend(CipherOverhead)
 
 	w.writeAccess.Lock()
+	defer w.writeAccess.Unlock()
 	_, err = lengthBuffer.WriteTo(w.upstream)
 	if err != nil {
 		return
@@ -165,7 +166,6 @@ func (w *AEADChunkWriter) Write(p []byte) (n int, err error) {
 			return
 		}
 	}
-	w.writeAccess.Unlock()
 	return
 }
 
