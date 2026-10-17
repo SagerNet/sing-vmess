@@ -264,7 +264,13 @@ func (c *VisionConn) CloseWrite() error {
 	c.writeClosed = true
 	if c.directWrite {
 		// TLS close_notify would corrupt the raw stream after DIRECT.
-		c.writeCloseErr = N.CloseWrite(c.netConn)
+		writer, _ := N.UnwrapCountWriter(c.netConn, nil)
+		if closer, ok := N.UnwrapWriter(writer).(N.WriteCloser); ok {
+			c.writeCloseErr = closer.CloseWrite()
+		} else {
+			// Carriers without half-close must still signal EOF to their peer.
+			c.writeCloseErr = c.netConn.Close()
+		}
 	} else {
 		// Commit a lazy VLESS request or response before closing its TLS writer.
 		_, c.writeCloseErr = c.Conn.Write(nil)
