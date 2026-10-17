@@ -53,6 +53,8 @@ type VisionConn struct {
 	enableXTLS             bool
 	isPadding              bool
 	directWrite            bool
+	writeClosed            bool
+	writeCloseErr          error
 	writeUUID              bool
 	withinPaddingBuffers   bool
 	remainingContent       int
@@ -197,6 +199,9 @@ func (c *VisionConn) Read(p []byte) (n int, err error) {
 func (c *VisionConn) Write(p []byte) (n int, err error) {
 	c.writeAccess.Lock()
 	defer c.writeAccess.Unlock()
+	if c.writeClosed {
+		return 0, net.ErrClosed
+	}
 	if c.numberOfPacketToFilter > 0 {
 		c.filterTLS([][]byte{p})
 	}
@@ -248,6 +253,32 @@ func (c *VisionConn) Write(p []byte) (n int, err error) {
 	} else {
 		return c.Conn.Write(p)
 	}
+}
+
+func (c *VisionConn) CloseWrite() error {
+	c.writeAccess.Lock()
+	defer c.writeAccess.Unlock()
+	if c.writeClosed {
+		return c.writeCloseErr
+	}
+	c.writeClosed = true
+	if c.directWrite {
+		// TLS close_notify would corrupt the raw stream after DIRECT.
+		writer, _ := N.UnwrapCountWriter(c.netConn, nil)
+		if closer, ok := N.UnwrapWriter(writer).(N.WriteCloser); ok {
+			c.writeCloseErr = closer.CloseWrite()
+		} else {
+			// Carriers without half-close must still signal EOF to their peer.
+			c.writeCloseErr = c.netConn.Close()
+		}
+	} else {
+		// Commit a lazy VLESS request or response before closing its TLS writer.
+		_, c.writeCloseErr = c.Conn.Write(nil)
+		if c.writeCloseErr == nil {
+			c.writeCloseErr = N.CloseWrite(c.Conn)
+		}
+	}
+	return c.writeCloseErr
 }
 
 func (c *VisionConn) filterTLS(buffers [][]byte) {
