@@ -240,7 +240,7 @@ func (s *Service[U]) NewConnection(ctx context.Context, conn net.Conn, source M.
 	var err error
 	if legacyProtocol {
 		requestBuffer.Advance(16)
-		reader = io.MultiReader(bytes.NewReader(requestBuffer.Bytes()), conn)
+		reader = bufio.NewCachedReader(conn, requestBuffer.ToOwned())
 
 		timeHash := md5.New()
 		common.Must(binary.Write(timeHash, binary.BigEndian, legacyTimestamp))
