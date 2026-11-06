@@ -118,6 +118,7 @@ func (c *MuxConnWrapper) WriteBuffer(buffer *buf.Buffer) error {
 		)
 		err := AddressSerializer.WriteAddrPort(header, c.destination)
 		if err != nil {
+			buffer.Release()
 			return err
 		}
 		common.Must(binary.Write(header, binary.BigEndian, uint16(dataLen)))

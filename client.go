@@ -472,6 +472,7 @@ func (c *clientConn) ReadBuffer(buffer *buf.Buffer) error {
 
 func (c *clientConn) WriteBuffer(buffer *buf.Buffer) error {
 	if c.writer == nil {
+		defer buffer.Release()
 		return c.writeHandshake(buffer.Bytes())
 	}
 	return c.writer.WriteBuffer(buffer)

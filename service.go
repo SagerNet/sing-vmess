@@ -551,6 +551,7 @@ func (c *serverPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksad
 	if c.writer == nil {
 		err := c.writeResponse()
 		if err != nil {
+			buffer.Release()
 			return err
 		}
 	}
