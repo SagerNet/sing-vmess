@@ -273,6 +273,10 @@ func (c *PacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	return c.Write(p)
 }
 
+func (c *PacketConn) RemoteAddr() net.Addr {
+	return c.destination
+}
+
 func (c *PacketConn) FrontHeadroom() int {
 	return 2
 }

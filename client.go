@@ -542,6 +542,10 @@ func (c *clientPacketConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksad
 	return
 }
 
+func (c *clientPacketConn) RemoteAddr() net.Addr {
+	return c.destination
+}
+
 func (c *clientPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) error {
 	if c.writer == nil {
 		err := c.writeHandshake(nil)

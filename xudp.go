@@ -39,6 +39,10 @@ func (c *XUDPConn) Write(p []byte) (n int, err error) {
 	return c.WriteTo(p, c.destination)
 }
 
+func (c *XUDPConn) RemoteAddr() net.Addr {
+	return c.destination
+}
+
 func (c *XUDPConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 	buffer := buf.With(p)
 	var destination M.Socksaddr
