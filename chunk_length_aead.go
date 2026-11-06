@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"io"
-	"sync"
 
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/buf"
@@ -100,8 +99,6 @@ type AEADChunkWriter struct {
 	globalPadding sha3.ShakeHash
 	nonce         []byte
 	nonceCount    uint16
-	hashAccess    sync.Mutex
-	writeAccess   sync.Mutex
 }
 
 func NewAEADChunkWriter(upstream io.Writer, cipher cipher.AEAD, nonce []byte, globalPadding sha3.ShakeHash) *AEADChunkWriter {
@@ -124,49 +121,7 @@ func NewChacha20Poly1305ChunkWriter(upstream io.Writer, key []byte, nonce []byte
 }
 
 func (w *AEADChunkWriter) Write(p []byte) (n int, err error) {
-	if len(p) == 0 {
-		return 0, nil
-	}
-	dataLength := uint16(len(p))
-	var paddingLen uint16
-	if w.globalPadding != nil {
-		w.hashAccess.Lock()
-		var hashCode uint16
-		common.Must(binary.Read(w.globalPadding, binary.BigEndian, &hashCode))
-		paddingLen = hashCode % MaxPaddingSize
-		dataLength += paddingLen
-		w.hashAccess.Unlock()
-	}
-	dataLength -= CipherOverhead
-
-	lengthBuffer := buf.NewSize(2 + CipherOverhead)
-	binary.BigEndian.PutUint16(lengthBuffer.Extend(2), dataLength)
-
-	binary.BigEndian.PutUint16(w.nonce, w.nonceCount)
-	w.nonceCount += 1
-	w.cipher.Seal(lengthBuffer.Index(0), w.nonce, lengthBuffer.Bytes(), nil)
-	lengthBuffer.Extend(CipherOverhead)
-
-	w.writeAccess.Lock()
-	_, err = lengthBuffer.WriteTo(w.upstream)
-	if err != nil {
-		return
-	}
-
-	lengthBuffer.Release()
-
-	n, err = w.upstream.Write(p)
-	if err != nil {
-		return
-	}
-	if paddingLen > 0 {
-		_, err = io.CopyN(w.upstream, rand.Reader, int64(paddingLen))
-		if err != nil {
-			return
-		}
-	}
-	w.writeAccess.Unlock()
-	return
+	return bufio.WriteBuffer(w, buf.As(p))
 }
 
 func (w *AEADChunkWriter) WriteBuffer(buffer *buf.Buffer) error {
@@ -177,12 +132,10 @@ func (w *AEADChunkWriter) WriteBuffer(buffer *buf.Buffer) error {
 	dataLength := uint16(buffer.Len())
 	var paddingLen uint16
 	if w.globalPadding != nil {
-		w.hashAccess.Lock()
 		var hashCode uint16
 		common.Must(binary.Read(w.globalPadding, binary.BigEndian, &hashCode))
 		paddingLen = hashCode % MaxPaddingSize
 		dataLength += paddingLen
-		w.hashAccess.Unlock()
 	}
 	dataLength -= CipherOverhead
 	lengthBuffer := buffer.ExtendHeader(2 + CipherOverhead)

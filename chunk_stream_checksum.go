@@ -66,17 +66,14 @@ func NewStreamChecksumWriter(upstream *StreamChunkWriter) *StreamChecksumWriter 
 }
 
 func (w *StreamChecksumWriter) Write(p []byte) (n int, err error) {
-	hash := fnv.New32a()
-	common.Must1(hash.Write(p))
-	return w.upstream.WriteWithChecksum(hash.Sum32(), p)
+	return bufio.WriteBuffer(w, buf.As(p))
 }
 
 func (w *StreamChecksumWriter) WriteBuffer(buffer *buf.Buffer) error {
-	defer buffer.Release()
 	hash := fnv.New32a()
 	common.Must1(hash.Write(buffer.Bytes()))
 	hash.Sum(buffer.ExtendHeader(4)[:0])
-	return common.Error(w.upstream.Write(buffer.Bytes()))
+	return w.upstream.WriteBuffer(buffer)
 }
 
 func (w *StreamChecksumWriter) FrontHeadroom() int {
