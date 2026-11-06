@@ -1,14 +1,12 @@
 package vmess
 
 import (
-	std_bufio "bufio"
 	"context"
 	"encoding/binary"
 	"io"
 	"net"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/sagernet/sing/common"
@@ -22,13 +20,14 @@ import (
 func HandleMuxConnection(ctx context.Context, conn net.Conn, source M.Socksaddr, handler Handler) error {
 	ctx, cancel := context.WithCancelCause(ctx)
 	session := &serverSession{
-		ctx:          ctx,
-		source:       source,
-		conn:         conn,
-		directWriter: bufio.NewExtendedWriter(conn),
-		handler:      handler,
-		streams:      make(map[uint16]*serverStream),
-		writer:       std_bufio.NewWriter(conn),
+		ctx:           ctx,
+		source:        source,
+		conn:          conn,
+		writer:        bufio.NewExtendedWriter(conn),
+		frontHeadroom: N.CalculateFrontHeadroom(conn),
+		rearHeadroom:  N.CalculateRearHeadroom(conn),
+		handler:       handler,
+		streams:       make(map[uint16]*serverStream),
 	}
 	go func() {
 		<-ctx.Done()
@@ -38,16 +37,16 @@ func HandleMuxConnection(ctx context.Context, conn net.Conn, source M.Socksaddr,
 }
 
 type serverSession struct {
-	ctx          context.Context
-	source       M.Socksaddr
-	conn         net.Conn
-	directWriter N.ExtendedWriter
-	handler      Handler
-	streamAccess sync.RWMutex
-	streams      map[uint16]*serverStream
-	writer       *std_bufio.Writer
-	writeAccess  sync.Mutex
-	writeRace    uint32
+	ctx           context.Context
+	source        M.Socksaddr
+	conn          net.Conn
+	writer        N.ExtendedWriter
+	writeAccess   sync.Mutex
+	frontHeadroom int
+	rearHeadroom  int
+	handler       Handler
+	streamAccess  sync.RWMutex
+	streams       map[uint16]*serverStream
 }
 
 type serverStream struct {
@@ -202,10 +201,9 @@ func (c *serverSession) recv() error {
 	}
 
 	err = c.recvTo(stream, data, destination)
-	if err != nil {
-		return c.close(sessionID, err)
+	if err != nil && c.localClose(sessionID, err) {
+		go c.syncClose(sessionID, true)
 	}
-
 	return nil
 }
 
@@ -229,101 +227,15 @@ func (c *serverSession) recvTo(stream *serverStream, data *buf.Buffer, destinati
 	}
 }
 
-func (c *serverSession) syncWrite(sessionID uint16, data []byte) (int, error) {
-	writeRace := atomic.AddUint32(&c.writeRace, 1)
+func (c *serverSession) writeBuffer(buffer *buf.Buffer) error {
 	c.writeAccess.Lock()
 	defer c.writeAccess.Unlock()
-	err := c.writeFrame(sessionID, data)
-	if err != nil {
-		return 0, err
-	}
-	if writeRace == atomic.LoadUint32(&c.writeRace) {
-		err = c.writer.Flush()
-		if err != nil {
-			return 0, err
-		}
-	}
-	return len(data), nil
+	return c.writer.WriteBuffer(buffer)
 }
 
-func (c *serverSession) writeFrame(sessionID uint16, data []byte) error {
-	err := binary.Write(c.writer, binary.BigEndian, uint16(4))
-	if err != nil {
-		return err
-	}
-	err = binary.Write(c.writer, binary.BigEndian, sessionID)
-	if err != nil {
-		return err
-	}
-	err = binary.Write(c.writer, binary.BigEndian, uint8(StatusKeep))
-	if err != nil {
-		return err
-	}
-	err = binary.Write(c.writer, binary.BigEndian, uint8(OptionData))
-	if err != nil {
-		return err
-	}
-	err = binary.Write(c.writer, binary.BigEndian, uint16(len(data)))
-	if err != nil {
-		return err
-	}
-	return common.Error(c.writer.Write(data))
-}
-
-func (c *serverSession) syncWritePacket(sessionID uint16, data []byte, destination M.Socksaddr) (int, error) {
-	writeRace := atomic.AddUint32(&c.writeRace, 1)
-	c.writeAccess.Lock()
-	defer c.writeAccess.Unlock()
-	err := c.writePacketFrame(sessionID, data, destination)
-	if err != nil {
-		return 0, err
-	}
-	if writeRace == atomic.LoadUint32(&c.writeRace) {
-		err = c.writer.Flush()
-		if err != nil {
-			return 0, err
-		}
-	}
-	return len(data), nil
-}
-
-func (c *serverSession) writePacketFrame(sessionID uint16, data []byte, destination M.Socksaddr) error {
-	err := binary.Write(c.writer, binary.BigEndian, uint16(5+AddressSerializer.AddrPortLen(destination)))
-	if err != nil {
-		return err
-	}
-	err = binary.Write(c.writer, binary.BigEndian, sessionID)
-	if err != nil {
-		return err
-	}
-	err = binary.Write(c.writer, binary.BigEndian, uint8(StatusKeep))
-	if err != nil {
-		return err
-	}
-	err = binary.Write(c.writer, binary.BigEndian, uint8(OptionData))
-	if err != nil {
-		return err
-	}
-	if destination.IsValid() {
-		err = binary.Write(c.writer, binary.BigEndian, uint8(NetworkUDP))
-		if err != nil {
-			return err
-		}
-		err = AddressSerializer.WriteAddrPort(c.writer, destination)
-		if err != nil {
-			return err
-		}
-	}
-	err = binary.Write(c.writer, binary.BigEndian, uint16(len(data)))
-	if err != nil {
-		return err
-	}
-	return common.Error(c.writer.Write(data))
-}
-
-func (c *serverSession) close(sessionID uint16, err error) error {
-	if c.localClose(sessionID, err) {
-		return c.syncClose(sessionID, err != nil)
+func (c *serverSession) close(sessionID uint16) error {
+	if c.localClose(sessionID, nil) {
+		return c.syncClose(sessionID, false)
 	}
 	return nil
 }
@@ -341,41 +253,18 @@ func (c *serverSession) localClose(sessionID uint16, err error) bool {
 }
 
 func (c *serverSession) syncClose(sessionID uint16, hasError bool) error {
-	writeRace := atomic.AddUint32(&c.writeRace, 1)
-	c.writeAccess.Lock()
-	defer c.writeAccess.Unlock()
-	err := c.writeCloseFrame(sessionID, hasError)
-	if err != nil {
-		return err
-	}
-	if writeRace == atomic.LoadUint32(&c.writeRace) {
-		err = c.writer.Flush()
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (c *serverSession) writeCloseFrame(sessionID uint16, hasError bool) error {
-	err := binary.Write(c.writer, binary.BigEndian, uint16(4))
-	if err != nil {
-		return err
-	}
-	err = binary.Write(c.writer, binary.BigEndian, sessionID)
-	if err != nil {
-		return err
-	}
-	err = binary.Write(c.writer, binary.BigEndian, uint8(StatusEnd))
-	if err != nil {
-		return err
-	}
-	var option uint8
+	var option byte
 	if hasError {
 		option = OptionError
 	}
-	err = binary.Write(c.writer, binary.BigEndian, option)
-	return err
+	buffer := buf.NewSize(c.frontHeadroom + 6 + c.rearHeadroom)
+	buffer.Resize(c.frontHeadroom, 0)
+	frame := buffer.Extend(6)
+	binary.BigEndian.PutUint16(frame, 4)
+	binary.BigEndian.PutUint16(frame[2:], sessionID)
+	frame[4] = StatusEnd
+	frame[5] = option
+	return c.writeBuffer(buffer)
 }
 
 type serverMuxConn struct {
@@ -389,7 +278,7 @@ func (c *serverMuxConn) Read(b []byte) (n int, err error) {
 }
 
 func (c *serverMuxConn) Write(b []byte) (n int, err error) {
-	return c.session.syncWrite(c.sessionID, b)
+	return bufio.WriteBuffer(c, buf.As(b))
 }
 
 func (c *serverMuxConn) WriteBuffer(buffer *buf.Buffer) error {
@@ -402,19 +291,19 @@ func (c *serverMuxConn) WriteBuffer(buffer *buf.Buffer) error {
 		binary.Write(header, binary.BigEndian, uint8(OptionData)),
 		binary.Write(header, binary.BigEndian, uint16(dataLen)),
 	)
-	return c.session.directWriter.WriteBuffer(buffer)
+	return c.session.writeBuffer(buffer)
 }
 
 func (c *serverMuxConn) FrontHeadroom() int {
-	return 8
+	return 8 + c.session.frontHeadroom
 }
 
-func (c *serverMuxConn) UpstreamWriter() any {
-	return c.session.directWriter
+func (c *serverMuxConn) RearHeadroom() int {
+	return c.session.rearHeadroom
 }
 
 func (c *serverMuxConn) Close() error {
-	return c.session.close(c.sessionID, nil)
+	return c.session.close(c.sessionID)
 }
 
 func (c *serverMuxConn) LocalAddr() net.Addr {
@@ -499,7 +388,7 @@ func (c *serverMuxPacketConn) ReadPacket(buffer *buf.Buffer) (destination M.Sock
 }
 
 func (c *serverMuxPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
-	return c.session.syncWritePacket(c.sessionID, p, M.SocksaddrFromNet(addr))
+	return bufio.WritePacketBuffer(c, buf.As(p), M.SocksaddrFromNet(addr))
 }
 
 func (c *serverMuxPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) error {
@@ -514,22 +403,23 @@ func (c *serverMuxPacketConn) WritePacket(buffer *buf.Buffer, destination M.Sock
 	)
 	err := AddressSerializer.WriteAddrPort(header, destination)
 	if err != nil {
+		buffer.Release()
 		return err
 	}
 	common.Must(binary.Write(header, binary.BigEndian, uint16(dataLen)))
-	return c.session.directWriter.WriteBuffer(buffer)
+	return c.session.writeBuffer(buffer)
 }
 
 func (c *serverMuxPacketConn) FrontHeadroom() int {
-	return 9 + M.MaxSocksaddrLength
+	return 9 + M.MaxSocksaddrLength + c.session.frontHeadroom
 }
 
-func (c *serverMuxPacketConn) UpstreamWriter() any {
-	return c.session.directWriter
+func (c *serverMuxPacketConn) RearHeadroom() int {
+	return c.session.rearHeadroom
 }
 
 func (c *serverMuxPacketConn) Close() error {
-	return c.session.close(c.sessionID, nil)
+	return c.session.close(c.sessionID)
 }
 
 func (c *serverMuxPacketConn) LocalAddr() net.Addr {
