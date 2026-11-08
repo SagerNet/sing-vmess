@@ -3,7 +3,6 @@ package packetaddr
 import (
 	"net"
 
-	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/buf"
 	"github.com/sagernet/sing/common/bufio"
 	E "github.com/sagernet/sing/common/exceptions"
@@ -60,15 +59,7 @@ func (c *PacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 }
 
 func (c *PacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
-	destination := M.SocksaddrFromNet(addr)
-	buffer := buf.NewSize(AddressSerializer.AddrPortLen(destination) + len(p))
-	defer buffer.Release()
-	err = AddressSerializer.WriteAddrPort(buffer, destination)
-	if err != nil {
-		return
-	}
-	common.Must1(buffer.Write(p))
-	return c.NetPacketConn.WriteTo(buffer.Bytes(), c.bindAddr.UDPAddr())
+	return bufio.WritePacket(c, p, addr)
 }
 
 func (c *PacketConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksaddr, err error) {
@@ -85,11 +76,15 @@ func (c *PacketConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksaddr, er
 
 func (c *PacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) error {
 	if destination.IsFqdn() {
+		buffer.Release()
 		return E.Extend(ErrFqdnUnsupported, destination.Fqdn)
 	}
-	header := buf.With(buffer.ExtendHeader(AddressSerializer.AddrPortLen(destination)))
+	headerLen := AddressSerializer.AddrPortLen(destination)
+	buffer = N.ReadWaitOptions{FrontHeadroom: headerLen}.Copy(buffer)
+	header := buf.With(buffer.ExtendHeader(headerLen))
 	err := AddressSerializer.WriteAddrPort(header, destination)
 	if err != nil {
+		buffer.Release()
 		return err
 	}
 	return c.NetPacketConn.WritePacket(buffer, c.bindAddr)
