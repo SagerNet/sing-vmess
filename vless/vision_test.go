@@ -17,75 +17,77 @@ import (
 	"github.com/sagernet/sing/common/logger"
 )
 
-// After a direction switches to direct copy, the peer reads the raw transport.
-// Closing the outer TLS connection must not append its encrypted close_notify
-// to that stream: the bytes would be mistaken for inner TLS application data.
-func TestVisionCloseAfterDirectCopy(t *testing.T) {
+// Only the write direction determines how Close shuts down the connection.
+// The peer reads the raw transport after our direct write, but still expects
+// outer TLS records when only our read direction has switched to direct copy.
+func TestVisionClose(t *testing.T) {
 	t.Parallel()
-	for _, direction := range []string{"write", "read"} {
-		direction := direction
-		t.Run(direction, func(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		directWrite bool
+		directRead  bool
+	}{
+		{name: "before_direct_copy"},
+		{name: "direct_write", directWrite: true},
+		{name: "direct_read", directRead: true},
+		{name: "both_directions", directWrite: true, directRead: true},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			sender, receiver := visionTestPair(t)
-			// The TLS detector has already recognized a TLS 1.3 handshake.
-			sender.isTLS = true
-			sender.enableXTLS = true
-			// An inner application-data record triggers the actual direct-copy
-			// transitions in Write and Read, including the padding command.
-			record := []byte{23, 3, 3, 0, 4, 1, 2, 3, 4}
-			if _, err := sender.Write(record); err != nil {
-				t.Fatal(err)
+			closing, peer := visionTestPair(t)
+			if test.directWrite {
+				visionTestDirectCopy(t, closing, peer)
 			}
-			// A subsequent raw write also ensures Read consumes all padding.
-			if _, err := sender.Write([]byte{42}); err != nil {
-				t.Fatal(err)
+			if test.directRead {
+				visionTestDirectCopy(t, peer, closing)
 			}
-			record = append(record, 42)
-			got := make([]byte, len(record))
-			if _, err := io.ReadFull(receiver, got); err != nil {
-				t.Fatal(err)
-			}
-			if !bytes.Equal(got, record) {
-				t.Fatalf("record = %x, want %x", got, record)
-			}
-			if !sender.directWrite || !receiver.directRead {
-				t.Fatal("connection did not enter direct copy")
-			}
-			var closing *VisionConn
-			var peer io.Reader
-			if direction == "write" {
-				closing, peer = sender, receiver
-			} else {
-				closing, peer = receiver, sender.netConn
+			if closing.directWrite.Load() != test.directWrite || closing.directRead != test.directRead {
+				t.Fatal("connection did not enter the expected direct-copy state")
 			}
 			if err := closing.Close(); err != nil {
 				t.Fatal(err)
 			}
-			trailing, err := io.ReadAll(peer)
+			trailing, err := io.ReadAll(peer.netConn)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(trailing) != 0 {
-				t.Fatalf("outer TLS leaked %d bytes after direct copy: %x", len(trailing), trailing)
+			if test.directWrite {
+				if len(trailing) != 0 {
+					t.Fatalf("outer TLS leaked %d bytes after direct write: %x", len(trailing), trailing)
+				}
+			} else if len(trailing) < 5 || trailing[0] != 23 {
+				// TLS 1.3 encrypts close_notify in an application-data record.
+				t.Fatalf("missing encrypted TLS close_notify: %x", trailing)
 			}
 		})
 	}
 }
 
-func TestVisionCloseBeforeDirectCopy(t *testing.T) {
-	t.Parallel()
-	sender, receiver := visionTestPair(t)
-	if err := sender.Close(); err != nil {
+func visionTestDirectCopy(t *testing.T, sender, receiver *VisionConn) {
+	t.Helper()
+	// The TLS detector has already recognized a TLS 1.3 handshake.
+	sender.isTLS = true
+	sender.enableXTLS = true
+	// Trigger the real Write and Read transitions, including Vision padding.
+	record := []byte{23, 3, 3, 0, 4, 1, 2, 3, 4}
+	if _, err := sender.Write(record); err != nil {
 		t.Fatal(err)
 	}
-	// A normal TLS shutdown still sends close_notify. Read the raw transport
-	// to distinguish it from an abrupt transport close.
-	record, err := io.ReadAll(receiver.netConn)
-	if err != nil {
+	// A subsequent raw write ensures Read consumes all padding.
+	if _, err := sender.Write([]byte{42}); err != nil {
 		t.Fatal(err)
 	}
-	if len(record) < 5 || record[0] != 23 {
-		t.Fatalf("missing encrypted TLS close_notify: %x", record)
+	record = append(record, 42)
+	got := make([]byte, len(record))
+	if _, err := io.ReadFull(receiver, got); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, record) {
+		t.Fatalf("record = %x, want %x", got, record)
+	}
+	if !sender.directWrite.Load() || !receiver.directRead {
+		t.Fatal("connection did not enter direct copy")
 	}
 }
 

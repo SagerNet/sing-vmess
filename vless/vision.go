@@ -40,7 +40,6 @@ type VisionConn struct {
 	reader      *bufio.ChunkReader
 	writer      N.VectorisedWriter
 	writeAccess sync.Mutex
-	directMode  atomic.Bool
 	input       *bytes.Reader
 	rawInput    *bytes.Buffer
 	netConn     net.Conn
@@ -54,7 +53,7 @@ type VisionConn struct {
 	cipher                 uint16
 	enableXTLS             bool
 	isPadding              bool
-	directWrite            bool
+	directWrite            atomic.Bool
 	writeUUID              bool
 	withinPaddingBuffers   bool
 	remainingContent       int
@@ -150,7 +149,6 @@ func (c *VisionConn) Read(p []byte) (n int, err error) {
 					c.remainingContent = -1
 					c.remainingPadding = -1
 				} else if c.currentCommand == commandPaddingDirect {
-					c.directMode.Store(true)
 					c.withinPaddingBuffers = false
 					c.directRead = true
 
@@ -211,8 +209,7 @@ func (c *VisionConn) Write(p []byte) (n int, err error) {
 			if c.isTLS && buffer.Len() > 6 && bytes.Equal(tlsApplicationDataStart, buffer.To(3)) {
 				var command byte = commandPaddingEnd
 				if c.enableXTLS {
-					c.directMode.Store(true)
-					c.directWrite = true
+					c.directWrite.Store(true)
 					specIndex = i
 					command = commandPaddingDirect
 				}
@@ -226,7 +223,7 @@ func (c *VisionConn) Write(p []byte) (n int, err error) {
 			}
 			buffers[i] = c.padding(buffer, commandPaddingContinue)
 		}
-		if c.directWrite {
+		if c.directWrite.Load() {
 			encryptedBuffer := buffers[:specIndex+1]
 			err = c.writer.WriteVectorised(encryptedBuffer)
 			if err != nil {
@@ -247,7 +244,7 @@ func (c *VisionConn) Write(p []byte) (n int, err error) {
 		}
 		return
 	}
-	if c.directWrite {
+	if c.directWrite.Load() {
 		return c.netConn.Write(p)
 	} else {
 		return c.Conn.Write(p)
@@ -397,9 +394,7 @@ func (c *VisionConn) unPadding(buffer []byte) []*buf.Buffer {
 }
 
 func (c *VisionConn) Close() error {
-	if c.directMode.Load() {
-		// Once either direction uses the raw transport, an outer TLS
-		// close_notify would be interpreted as part of the inner stream.
+	if c.directWrite.Load() {
 		return c.netConn.Close()
 	}
 	return c.Conn.Close()
