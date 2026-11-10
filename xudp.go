@@ -127,7 +127,16 @@ func (c *XUDPConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksaddr, err 
 }
 
 func (c *XUDPConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
-	return bufio.WritePacketBuffer(c, buf.As(p), M.SocksaddrFromNet(addr))
+	frontHeadroom := N.CalculateFrontHeadroom(c)
+	rearHeadroom := N.CalculateRearHeadroom(c)
+	buffer := buf.NewSize(len(p) + frontHeadroom + rearHeadroom)
+	buffer.Resize(frontHeadroom, 0)
+	common.Must1(buffer.Write(p))
+	err = c.WritePacket(buffer, M.SocksaddrFromNet(addr))
+	if err == nil {
+		n = len(p)
+	}
+	return
 }
 
 func (c *XUDPConn) frontHeadroom(addrLen int) int {
