@@ -30,77 +30,51 @@ func NewMuxConnWrapper(conn net.Conn, destination M.Socksaddr) *MuxConnWrapper {
 }
 
 func (c *MuxConnWrapper) Read(p []byte) (n int, err error) {
-	buffer := buf.With(p)
-	err = c.ReadBuffer(buffer)
-	if err != nil {
-		return
+	for c.remaining == 0 {
+		var header [6]byte
+		_, err = io.ReadFull(c.Conn, header[:])
+		if err != nil {
+			return
+		}
+		length := binary.BigEndian.Uint16(header[:2])
+		status := header[4]
+		option := header[5]
+		switch status {
+		case StatusNew:
+			return 0, E.New("unexpected frame new")
+		case StatusKeep, StatusKeepAlive:
+		case StatusEnd:
+			return 0, io.EOF
+		default:
+			return 0, E.New("unexpected frame: ", status)
+		}
+		if length > 4 {
+			_, err = io.CopyN(io.Discard, c.Conn, int64(length-4))
+			if err != nil {
+				return
+			}
+		}
+		if option&OptionError == OptionError {
+			return 0, E.Cause(net.ErrClosed, "remote closed")
+		}
+		if option&OptionData == OptionData {
+			_, err = io.ReadFull(c.Conn, header[:2])
+			if err != nil {
+				return
+			}
+			c.remaining = int(binary.BigEndian.Uint16(header[:2]))
+		}
 	}
-	n = buffer.Len()
+	if len(p) > c.remaining {
+		p = p[:c.remaining]
+	}
+	n, err = c.Conn.Read(p)
+	c.remaining -= n
 	return
 }
 
 func (c *MuxConnWrapper) Write(p []byte) (n int, err error) {
 	return bufio.WriteBuffer(c, buf.As(p))
-}
-
-func (c *MuxConnWrapper) ReadBuffer(buffer *buf.Buffer) error {
-	start := buffer.Start()
-	for c.remaining == 0 {
-		_, err := buffer.ReadFullFrom(c.Conn, 6)
-		if err != nil {
-			return err
-		}
-		var length uint16
-		err = binary.Read(buffer, binary.BigEndian, &length)
-		if err != nil {
-			return err
-		}
-		header, err := buffer.ReadBytes(4)
-		if err != nil {
-			return err
-		}
-
-		switch header[2] {
-		case StatusNew:
-			return E.New("unexpected frame new")
-		case StatusKeep:
-			if length > 4 {
-				_, err = io.CopyN(io.Discard, c.Conn, int64(length-4))
-				if err != nil {
-					return err
-				}
-			}
-		case StatusEnd:
-			return io.EOF
-		case StatusKeepAlive:
-		default:
-			return E.New("unexpected frame: ", buffer.Byte(2))
-		}
-		// option error
-		if header[3]&2 == 2 {
-			return E.Cause(net.ErrClosed, "remote closed")
-		}
-		// option data
-		if header[3]&1 == 1 {
-			err = binary.Read(c.Conn, binary.BigEndian, &length)
-			if err != nil {
-				return err
-			}
-			c.remaining = int(length)
-		}
-		buffer.Resize(start, 0)
-	}
-	p := buffer.FreeBytes()
-	if c.remaining < len(p) {
-		p = p[:c.remaining]
-	}
-	n, err := c.Conn.Read(p)
-	if err != nil {
-		return err
-	}
-	c.remaining -= n
-	buffer.Truncate(n)
-	return nil
 }
 
 func (c *MuxConnWrapper) WriteBuffer(buffer *buf.Buffer) error {
@@ -155,3 +129,8 @@ func (c *MuxConnWrapper) FrontHeadroom() int {
 func (c *MuxConnWrapper) Upstream() any {
 	return c.Conn
 }
+
+var (
+	_ N.ExtendedWriter = (*MuxConnWrapper)(nil)
+	_ N.FrontHeadroom  = (*MuxConnWrapper)(nil)
+)
